@@ -20,6 +20,20 @@ const pool = new Pool({
 });
 
 app.disable('x-powered-by');
+app.set('trust proxy', 1);
+
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=()');
+  res.setHeader(
+    'Content-Security-Policy',
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+  );
+  next();
+});
+
 app.use(express.json({ limit: '128kb' }));
 app.use(cookieParser(SESSION_SECRET));
 app.use(express.static('public'));
@@ -169,6 +183,7 @@ async function ensureSchema() {
 }
 
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
+app.use('/api', globalApiLimit);
 
 app.get('/api/auth/status', asyncRoute(async (req, res) => {
   const userId = signedInUserId(req);
@@ -182,7 +197,7 @@ app.get('/api/auth/status', asyncRoute(async (req, res) => {
   res.json({ authenticated: true, user: rows[0] });
 }));
 
-app.post('/api/auth/register', asyncRoute(async (req, res) => {
+app.post('/api/auth/register', authLimit, registerLimit, asyncRoute(async (req, res) => {
   const { username, key } = normalizeUsername(req.body?.username);
   const password = validatePassword(req.body?.password);
   const passwordHash = await hashPassword(password);
@@ -203,8 +218,10 @@ app.post('/api/auth/register', asyncRoute(async (req, res) => {
   }
 }));
 
-app.post('/api/auth/login', asyncRoute(async (req, res) => {
+app.post('/api/auth/login', authLimit, asyncRoute(async (req, res) => {
   const { key } = normalizeUsername(req.body?.username);
+  if (!checkLoginBlock(req, res, key)) return;
+
   const password = String(req.body?.password ?? '');
   const { rows } = await pool.query(
     'SELECT id, username, password_hash FROM cf_users WHERE username_key = $1',
@@ -213,9 +230,11 @@ app.post('/api/auth/login', asyncRoute(async (req, res) => {
 
   const user = rows[0];
   if (!user || !(await verifyPassword(password, user.password_hash))) {
+    recordLoginFailure(req, key);
     return res.status(401).json({ error: 'Usuário ou senha incorretos.' });
   }
 
+  clearLoginFailures(req, key);
   setAuthCookie(res, user.id);
   res.json({ user: { id: user.id, username: user.username } });
 }));
