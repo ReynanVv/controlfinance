@@ -40,6 +40,123 @@ app.use(express.static('public'));
 
 const monthRegex = /^\d{4}-(0[1-9]|1[0-2])$/;
 
+const rateLimitStores = new Map();
+const loginFailures = new Map();
+
+function clientIp(req) {
+  return req.ip || req.socket?.remoteAddress || 'unknown';
+}
+
+function rateLimit({
+  name,
+  windowMs,
+  max,
+  key = (req) => clientIp(req),
+  message = 'Muitas requisições. Tente novamente em instantes.',
+}) {
+  return (req, res, next) => {
+    const now = Date.now();
+    const bucketKey = `${name}:${key(req)}`;
+    const current = rateLimitStores.get(bucketKey);
+
+    if (!current || now >= current.resetAt) {
+      rateLimitStores.set(bucketKey, { count: 1, resetAt: now + windowMs });
+      return next();
+    }
+
+    current.count += 1;
+    if (current.count > max) {
+      const retryAfter = Math.max(1, Math.ceil((current.resetAt - now) / 1000));
+      res.setHeader('Retry-After', String(retryAfter));
+      return res.status(429).json({ error: message, retryAfter });
+    }
+
+    next();
+  };
+}
+
+const globalApiLimit = rateLimit({
+  name: 'api',
+  windowMs: 60 * 1000,
+  max: 120,
+});
+
+const authLimit = rateLimit({
+  name: 'auth',
+  windowMs: 10 * 60 * 1000,
+  max: 20,
+  message: 'Muitas tentativas de autenticação. Aguarde alguns minutos.',
+});
+
+const registerLimit = rateLimit({
+  name: 'register',
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  message: 'Muitas contas criadas a partir deste endereço. Tente novamente mais tarde.',
+});
+
+function loginFailureKey(req, usernameKey) {
+  return `${clientIp(req)}:${usernameKey}`;
+}
+
+function checkLoginBlock(req, res, usernameKey) {
+  const key = loginFailureKey(req, usernameKey);
+  const entry = loginFailures.get(key);
+  const now = Date.now();
+
+  if (!entry) return true;
+
+  if (entry.blockedUntil && entry.blockedUntil > now) {
+    const retryAfter = Math.max(1, Math.ceil((entry.blockedUntil - now) / 1000));
+    res.setHeader('Retry-After', String(retryAfter));
+    res.status(429).json({
+      error: 'Muitas tentativas incorretas. Tente novamente mais tarde.',
+      retryAfter,
+    });
+    return false;
+  }
+
+  if (entry.blockedUntil && entry.blockedUntil <= now) {
+    loginFailures.delete(key);
+  }
+
+  return true;
+}
+
+function recordLoginFailure(req, usernameKey) {
+  const key = loginFailureKey(req, usernameKey);
+  const now = Date.now();
+  const entry = loginFailures.get(key);
+
+  if (!entry || now - entry.firstFailureAt > 15 * 60 * 1000) {
+    loginFailures.set(key, { count: 1, firstFailureAt: now, blockedUntil: 0 });
+    return;
+  }
+
+  entry.count += 1;
+  if (entry.count >= 5) {
+    entry.blockedUntil = now + 15 * 60 * 1000;
+  }
+}
+
+function clearLoginFailures(req, usernameKey) {
+  loginFailures.delete(loginFailureKey(req, usernameKey));
+}
+
+setInterval(() => {
+  const now = Date.now();
+
+  for (const [key, value] of rateLimitStores) {
+    if (now >= value.resetAt) rateLimitStores.delete(key);
+  }
+
+  for (const [key, value] of loginFailures) {
+    const oldFailure = now - value.firstFailureAt > 60 * 60 * 1000;
+    const expiredBlock = value.blockedUntil && now >= value.blockedUntil;
+    if (oldFailure || expiredBlock) loginFailures.delete(key);
+  }
+}, 10 * 60 * 1000).unref();
+
 function money(value, fieldName = 'valor') {
   if (typeof value === 'number') {
     if (!Number.isFinite(value) || value < 0) throw new Error(`${fieldName} inválido.`);
