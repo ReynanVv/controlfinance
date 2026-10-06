@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#090909" />
+  <title>Control Finance</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div id="loginView" class="login-view hidden">
+    <form id="loginForm" class="login-card">
+      <div class="brand-mark">CF</div>
+      <h1>Control Finance</h1>
+      <p>Suas finanças, do seu jeito.</p>
+      <label>
+        Senha
+        <input id="passwordInput" type="password" autocomplete="current-password" required autofocus />
+      </label>
+      <button class="primary-btn" type="submit">Entrar</button>
+      <p id="loginError" class="form-error"></p>
+    </form>
+  </div>
+
+  <main id="app" class="app hidden">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">CONTROLE FINANCEIRO</p>
+        <h1>Control Finance</h1>
+      </div>
+      <button id="logoutBtn" class="icon-btn subtle hidden" title="Sair" aria-label="Sair">↗</button>
+    </header>
+
+    <section class="month-picker">
+      <button id="prevMonth" class="icon-btn" aria-label="Mês anterior">‹</button>
+      <button id="monthLabel" class="month-label" type="button"></button>
+      <button id="nextMonth" class="icon-btn" aria-label="Próximo mês">›</button>
+      <input id="monthInput" type="month" class="visually-hidden" />
+    </section>
+
+    <section class="summary-grid">
+      <article class="summary-card balance-card">
+        <span>Saldo</span>
+        <strong id="balanceValue">R$ 0,00</strong>
+        <small>Ganhos − gastos</small>
+      </article>
+      <article class="summary-card">
+        <span>Ganhos</span>
+        <strong id="incomeValue">R$ 0,00</strong>
+        <small id="incomeCount">0 lançamentos</small>
+      </article>
+      <article class="summary-card">
+        <span>Gastos</span>
+        <strong id="expenseValue">R$ 0,00</strong>
+        <small id="expenseCount">0 lançamentos</small>
+      </article>
+    </section>
+
+    <section class="quick-actions">
+      <button id="addIncomeBtn" class="action-btn income-action">+ Ganho</button>
+      <button id="addExpenseBtn" class="action-btn expense-action">+ Gasto</button>
+    </section>
+
+    <section class="content-section">
+      <div class="section-heading">
+        <div>
+          <span class="section-kicker">ENTRADAS</span>
+          <h2>Ganhos</h2>
+        </div>
+      </div>
+      <div id="incomeList" class="entry-list"></div>
+    </section>
+
+    <section class="content-section">
+      <div class="section-heading">
+        <div>
+          <span class="section-kicker">SAÍDAS</span>
+          <h2>Gastos</h2>
+        </div>
+        <span class="section-note">Subgastos entram no total do gasto</span>
+      </div>
+      <div id="expenseList" class="entry-list"></div>
+    </section>
+  </main>
+
+  <dialog id="entryDialog" class="entry-dialog">
+    <form id="entryForm" method="dialog">
+      <div class="dialog-head">
+        <div>
+          <p id="dialogEyebrow" class="eyebrow"></p>
+          <h2 id="dialogTitle"></h2>
+        </div>
+        <button id="closeDialogBtn" type="button" class="icon-btn subtle" aria-label="Fechar">×</button>
+      </div>
+
+      <input id="entryId" type="hidden" />
+      <input id="entryType" type="hidden" />
+      <input id="parentExpenseId" type="hidden" />
+
+      <label>
+        Nome
+        <input id="nameField" maxlength="120" placeholder="Ex.: Santander, salário, Spotify" required />
+      </label>
+      <label>
+        Valor
+        <div class="money-field">
+          <span>R$</span>
+          <input id="amountField" inputmode="decimal" placeholder="0,00" required />
+        </div>
+      </label>
+      <label id="monthFieldWrap">
+        Mês
+        <input id="monthField" type="month" required />
+      </label>
+      <label>
+        Dia do mês <span class="optional">opcional</span>
+        <input id="dayField" type="number" min="1" max="31" placeholder="Ex.: 10" />
+      </label>
+      <label>
+        Observação <span class="optional">opcional</span>
+        <textarea id="notesField" rows="3" maxlength="500" placeholder="Qualquer detalhe que você queira lembrar"></textarea>
+      </label>
+
+      <p id="entryError" class="form-error"></p>
+      <button id="saveEntryBtn" class="primary-btn" type="submit">Salvar</button>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="/app.js" defer></script>
+</body>
+</html>
