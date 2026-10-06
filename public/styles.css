@@ -213,3 +213,31 @@ textarea { resize: vertical; }
   .balance-card { grid-column: auto; }
   .quick-actions { max-width: 420px; }
 }
+
+.account-label {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: .82rem;
+}
+.auth-switch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  padding: 5px;
+  margin: 18px 0;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #0b0b0b;
+}
+.auth-tab {
+  border: 0;
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 800;
+}
+.auth-tab.active {
+  background: var(--surface-2);
+  color: var(--text);
+}
