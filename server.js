@@ -491,20 +491,46 @@ app.put('/api/expenses/:id', asyncRoute(async (req, res) => {
   const payload = {
     month: month(req.body.month),
     name: text(req.body.name, 'Nome', true, 120),
-    baseAmount: money(req.body.baseAmount ?? req.body.amount),
+    totalAmount: money(req.body.baseAmount ?? req.body.amount, 'Valor total'),
     day: day(req.body.day),
     notes: text(req.body.notes, 'Observação', false, 500),
   };
+
+  const { rows: subtotalRows } = await pool.query(`
+    SELECT
+      e.id,
+      COALESCE(SUM(s.amount), 0)::float8 AS "subTotal"
+    FROM cf_expenses e
+    LEFT JOIN cf_subexpenses s
+      ON s.expense_id = e.id
+      AND s.user_id = e.user_id
+    WHERE e.id = $1 AND e.user_id = $2
+    GROUP BY e.id
+  `, [req.params.id, req.userId]);
+
+  if (!subtotalRows[0]) return res.status(404).json({ error: 'Gasto não encontrado.' });
+
+  const subTotal = Number(subtotalRows[0].subTotal || 0);
+  const baseAmount = Number((payload.totalAmount - subTotal).toFixed(2));
+
+  if (baseAmount < 0) {
+    return res.status(400).json({
+      error: `O valor total não pode ser menor que os subgastos já cadastrados (${subTotal.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}).`,
+    });
+  }
 
   const { rows } = await pool.query(`
     UPDATE cf_expenses
     SET month = $3, name = $4, base_amount = $5, day = $6, notes = $7, updated_at = NOW()
     WHERE id = $1 AND user_id = $2
     RETURNING id, month, name, base_amount::float8 AS "baseAmount", day, notes
-  `, [req.params.id, req.userId, payload.month, payload.name, payload.baseAmount, payload.day, payload.notes]);
+  `, [req.params.id, req.userId, payload.month, payload.name, baseAmount, payload.day, payload.notes]);
 
-  if (!rows[0]) return res.status(404).json({ error: 'Gasto não encontrado.' });
-  res.json(rows[0]);
+  res.json({
+    ...rows[0],
+    subTotal,
+    total: payload.totalAmount,
+  });
 }));
 
 app.delete('/api/expenses/:id', asyncRoute(async (req, res) => {
