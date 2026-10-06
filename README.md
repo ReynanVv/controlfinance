@@ -39,6 +39,14 @@ npm run dev
 
 ## Deploy no Render
 
-O repositório inclui `render.yaml` com um Web Service Node e um PostgreSQL. No Render, crie um Blueprint a partir do repositório e informe `APP_PASSWORD` quando solicitado. `SESSION_SECRET` é gerado automaticamente.
+O repositório inclui `render.yaml` para o Web Service Node.
+
+No workspace usado neste projeto, o PostgreSQL `controlfinance-db` já foi criado. Para concluir pelo Blueprint do Render, informe:
+
+- `DATABASE_URL`: o **Internal Database URL** do `controlfinance-db`.
+- `APP_PASSWORD`: a senha que você quer usar para entrar no app.
+- `SESSION_SECRET`: é gerado automaticamente pelo Blueprint.
 
 O servidor cria as tabelas automaticamente no primeiro start.
+
+> Observação: o banco atualmente está no plano gratuito do Render e, por isso, possui expiração própria do plano. Para uso permanente, mude o banco para um plano persistente antes da expiração.
