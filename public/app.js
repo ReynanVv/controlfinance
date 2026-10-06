@@ -335,6 +335,10 @@ $('#loginForm').addEventListener('submit', async (event) => {
   }
 });
 
+$('#reloadBtn').addEventListener('click', () => {
+  window.location.reload();
+});
+
 $('#logoutBtn').addEventListener('click', async () => {
   await api('/api/auth/logout', { method: 'POST' }).catch(() => {});
   showLogin();
