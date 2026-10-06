@@ -1,52 +1,28 @@
 # Control Finance
 
-App pessoal e simples para substituir as anotações mensais de finanças: você cadastra **ganhos** e **gastos** sem categorias obrigatórias, navega por mês e vê o saldo `ganhos - gastos`.
+Controle financeiro pessoal simples, sem categorias obrigatórias. Cada pessoa cria a própria conta e vê somente os próprios dados.
 
-A regra especial são os **subgastos**. Um gasto possui um valor-base e pode receber subgastos que entram automaticamente no total. Exemplo: `Santander = R$ 300` + `Spotify = R$ 20` → total do Santander `R$ 320`.
+## O que faz
 
-## Funcionalidades
-
-- Ganhos e gastos livres, sem classes de cartão/conta/categoria.
-- Separação por mês.
-- Dia do mês opcional em qualquer lançamento.
+- Cadastro e login por usuário + senha.
+- Sessão por cookie seguro com duração de 30 dias.
+- Dados separados por conta no PostgreSQL.
+- Ganhos e gastos livres, separados por mês.
 - Edição e exclusão a qualquer momento.
-- Subgastos dentro de um gasto, com soma automática.
-- Resumo mensal de ganhos, gastos e saldo.
-- Interface mobile-first inspirada no visual escuro das anotações usadas como referência.
-- Proteção por uma senha única (`APP_PASSWORD`).
-- PostgreSQL para manter os dados entre deploys.
+- Subgastos dentro de um gasto: Santander R$ 300 + Spotify R$ 20 = Santander R$ 320.
+- Dia e observação opcionais.
+- Migração opcional dos dados salvos pela versão antiga em localStorage.
 
-## Rodar localmente
+## Deploy
 
-```bash
-npm install
-```
+O arquivo `render.yaml` liga o Web Service ao PostgreSQL `controlfinance-db` e gera `SESSION_SECRET` automaticamente.
 
-Crie um `.env`:
+Para desenvolvimento local:
 
 ```env
 DATABASE_URL=postgres://usuario:senha@localhost:5432/controlfinance
-APP_PASSWORD=sua-senha
-SESSION_SECRET=uma-chave-grande-e-aleatoria
+SESSION_SECRET=uma-chave-grande
 PORT=3000
 ```
 
-Depois:
-
-```bash
-npm run dev
-```
-
-## Deploy no Render
-
-O repositório inclui `render.yaml` para o Web Service Node.
-
-No workspace usado neste projeto, o PostgreSQL `controlfinance-db` já foi criado. Para concluir pelo Blueprint do Render, informe:
-
-- `DATABASE_URL`: o **Internal Database URL** do `controlfinance-db`.
-- `APP_PASSWORD`: a senha que você quer usar para entrar no app.
-- `SESSION_SECRET`: é gerado automaticamente pelo Blueprint.
-
-O servidor cria as tabelas automaticamente no primeiro start.
-
-> Observação: o banco atualmente está no plano gratuito do Render e, por isso, possui expiração própria do plano. Para uso permanente, mude o banco para um plano persistente antes da expiração.
+Depois rode `npm install` e `npm run dev`.
