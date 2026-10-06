@@ -1,12 +1,79 @@
 const $ = (selector) => document.querySelector(selector);
-const state = { month: currentMonth(), data: null, authRequired: false };
 
-const monthNames = new Intl.DateTimeFormat('pt-BR', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+const STORAGE_KEY = 'controlfinance.v1';
+const state = {
+  month: currentMonth(),
+  data: null,
+  store: loadStore(),
+};
+
+const monthNames = new Intl.DateTimeFormat('pt-BR', {
+  month: 'long',
+  year: 'numeric',
+  timeZone: 'UTC',
+});
 const brl = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 
 function currentMonth() {
   const now = new Date();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function emptyStore() {
+  return { incomes: [], expenses: [] };
+}
+
+function loadStore() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
+    if (!parsed || !Array.isArray(parsed.incomes) || !Array.isArray(parsed.expenses)) return emptyStore();
+    return parsed;
+  } catch {
+    return emptyStore();
+  }
+}
+
+function saveStore() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state.store));
+}
+
+function id() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function parseMoney(value) {
+  const raw = String(value ?? '').trim().replace(/\s/g, '');
+  if (!raw) throw new Error('Informe um valor.');
+
+  let normalized = raw;
+  if (normalized.includes(',') && normalized.includes('.')) {
+    normalized = normalized.lastIndexOf(',') > normalized.lastIndexOf('.')
+      ? normalized.replace(/\./g, '').replace(',', '.')
+      : normalized.replace(/,/g, '');
+  } else if (normalized.includes(',')) {
+    normalized = normalized.replace(',', '.');
+  }
+
+  const number = Number(normalized);
+  if (!Number.isFinite(number) || number < 0) throw new Error('Valor inválido.');
+  return Math.round(number * 100) / 100;
+}
+
+function parseDay(value) {
+  if (value === '' || value === null || value === undefined) return null;
+  const number = Number(value);
+  if (!Number.isInteger(number) || number < 1 || number > 31) {
+    throw new Error('Dia deve estar entre 1 e 31.');
+  }
+  return number;
+}
+
+function cleanText(value, required = false, max = 500) {
+  const result = String(value ?? '').trim();
+  if (required && !result) throw new Error('Informe um nome.');
+  if (result.length > max) throw new Error('Texto muito longo.');
+  return result || '';
 }
 
 function formatMonth(value) {
@@ -16,8 +83,8 @@ function formatMonth(value) {
 
 function changeMonth(delta) {
   const [year, month] = state.month.split('-').map(Number);
-  const d = new Date(year, month - 1 + delta, 1);
-  state.month = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  const date = new Date(year, month - 1 + delta, 1);
+  state.month = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
   loadSummary();
 }
 
@@ -37,48 +104,40 @@ function escapeHtml(value) {
     .replaceAll("'", '&#039;');
 }
 
-async function api(path, options = {}) {
-  const response = await fetch(path, {
-    ...options,
-    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
-  });
-  if (response.status === 204) return null;
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    if (response.status === 401 && path !== '/api/auth/login') showLogin();
-    throw new Error(body.error || 'Não foi possível concluir a ação.');
-  }
-  return body;
-}
-
-async function init() {
-  const auth = await api('/api/auth/status');
-  state.authRequired = auth.required;
-  $('#logoutBtn').classList.toggle('hidden', !auth.required);
-  if (!auth.authenticated) return showLogin();
-  showApp();
-  await loadSummary();
-}
-
-function showLogin() {
-  $('#app').classList.add('hidden');
-  $('#loginView').classList.remove('hidden');
-}
-
-function showApp() {
-  $('#loginView').classList.add('hidden');
-  $('#app').classList.remove('hidden');
-}
-
-async function loadSummary() {
+function loadSummary() {
   $('#monthLabel').textContent = formatMonth(state.month);
   $('#monthInput').value = state.month;
-  try {
-    state.data = await api(`/api/summary?month=${encodeURIComponent(state.month)}`);
-    render();
-  } catch (error) {
-    toast(error.message, true);
-  }
+
+  const incomes = state.store.incomes
+    .filter((item) => item.month === state.month)
+    .sort((a, b) => (a.day ?? 99) - (b.day ?? 99));
+
+  const expenses = state.store.expenses
+    .filter((item) => item.month === state.month)
+    .sort((a, b) => (a.day ?? 99) - (b.day ?? 99))
+    .map((expense) => {
+      const subTotal = expense.subexpenses.reduce((sum, sub) => sum + sub.amount, 0);
+      return {
+        ...expense,
+        subTotal: Math.round(subTotal * 100) / 100,
+        total: Math.round((expense.baseAmount + subTotal) * 100) / 100,
+      };
+    });
+
+  const incomeTotal = incomes.reduce((sum, item) => sum + item.amount, 0);
+  const expenseTotal = expenses.reduce((sum, item) => sum + item.total, 0);
+
+  state.data = {
+    incomes,
+    expenses,
+    totals: {
+      income: Math.round(incomeTotal * 100) / 100,
+      expense: Math.round(expenseTotal * 100) / 100,
+      balance: Math.round((incomeTotal - expenseTotal) * 100) / 100,
+    },
+  };
+
+  render();
 }
 
 function render() {
@@ -154,7 +213,7 @@ function renderExpenses(expenses) {
                   <div class="sub-value">+ ${brl.format(sub.amount)}</div>
                   <div class="sub-actions">
                     <button class="mini-btn" data-action="edit-sub" data-id="${sub.id}" data-parent="${item.id}">Editar</button>
-                    <button class="mini-btn danger" data-action="delete-sub" data-id="${sub.id}">Excluir</button>
+                    <button class="mini-btn danger" data-action="delete-sub" data-id="${sub.id}" data-parent="${item.id}">Excluir</button>
                   </div>
                 </div>
               </div>
@@ -173,13 +232,16 @@ function renderExpenses(expenses) {
 function openDialog(type, item = null, parentExpenseId = '') {
   const isSub = type === 'subexpense';
   const isIncome = type === 'income';
+
   $('#entryType').value = type;
   $('#entryId').value = item?.id || '';
   $('#parentExpenseId').value = parentExpenseId || item?.expenseId || '';
   $('#dialogEyebrow').textContent = item ? 'EDITAR LANÇAMENTO' : 'NOVO LANÇAMENTO';
   $('#dialogTitle').textContent = isSub ? 'Subgasto' : isIncome ? 'Ganho' : 'Gasto';
   $('#nameField').value = item?.name || '';
-  $('#amountField').value = item ? String(isIncome || isSub ? item.amount : item.baseAmount).replace('.', ',') : '';
+  $('#amountField').value = item
+    ? String(isIncome || isSub ? item.amount : item.baseAmount).replace('.', ',')
+    : '';
   $('#monthField').value = item?.month || state.month;
   $('#dayField').value = item?.day || '';
   $('#notesField').value = item?.notes || '';
@@ -191,70 +253,106 @@ function openDialog(type, item = null, parentExpenseId = '') {
   setTimeout(() => $('#nameField').focus(), 0);
 }
 
-function findExpense(id) {
-  return state.data.expenses.find((item) => item.id === id);
+function findIncome(itemId) {
+  return state.store.incomes.find((item) => item.id === itemId);
 }
 
-function findSub(id) {
-  for (const expense of state.data.expenses) {
-    const item = expense.subexpenses.find((sub) => sub.id === id);
-    if (item) return item;
-  }
-  return null;
+function findExpense(itemId) {
+  return state.store.expenses.find((item) => item.id === itemId);
 }
 
-async function saveEntry(event) {
+function findSub(itemId, parentId) {
+  return findExpense(parentId)?.subexpenses.find((sub) => sub.id === itemId);
+}
+
+function saveEntry(event) {
   event.preventDefault();
-  const type = $('#entryType').value;
-  const id = $('#entryId').value;
-  const parentExpenseId = $('#parentExpenseId').value;
-  const payload = {
-    name: $('#nameField').value,
-    amount: $('#amountField').value,
-    baseAmount: $('#amountField').value,
-    month: $('#monthField').value,
-    day: $('#dayField').value,
-    notes: $('#notesField').value,
-  };
-
-  let path;
-  let method;
-  if (type === 'income') {
-    path = id ? `/api/incomes/${id}` : '/api/incomes';
-    method = id ? 'PUT' : 'POST';
-  } else if (type === 'expense') {
-    path = id ? `/api/expenses/${id}` : '/api/expenses';
-    method = id ? 'PUT' : 'POST';
-  } else {
-    path = id ? `/api/subexpenses/${id}` : `/api/expenses/${parentExpenseId}/subexpenses`;
-    method = id ? 'PUT' : 'POST';
-  }
 
   try {
-    $('#saveEntryBtn').disabled = true;
-    await api(path, { method, body: JSON.stringify(payload) });
+    const type = $('#entryType').value;
+    const entryId = $('#entryId').value;
+    const parentExpenseId = $('#parentExpenseId').value;
+    const name = cleanText($('#nameField').value, true, 120);
+    const amount = parseMoney($('#amountField').value);
+    const day = parseDay($('#dayField').value);
+    const notes = cleanText($('#notesField').value, false, 500);
+    const selectedMonth = $('#monthField').value || state.month;
+
+    if (type === 'income') {
+      if (entryId) {
+        const item = findIncome(entryId);
+        Object.assign(item, { month: selectedMonth, name, amount, day, notes });
+      } else {
+        state.store.incomes.push({ id: id(), month: selectedMonth, name, amount, day, notes });
+      }
+    } else if (type === 'expense') {
+      if (entryId) {
+        const item = findExpense(entryId);
+        Object.assign(item, { month: selectedMonth, name, baseAmount: amount, day, notes });
+      } else {
+        state.store.expenses.push({
+          id: id(),
+          month: selectedMonth,
+          name,
+          baseAmount: amount,
+          day,
+          notes,
+          subexpenses: [],
+        });
+      }
+    } else {
+      const parent = findExpense(parentExpenseId);
+      if (!parent) throw new Error('Gasto principal não encontrado.');
+
+      if (entryId) {
+        const item = findSub(entryId, parentExpenseId);
+        Object.assign(item, { name, amount, day, notes });
+      } else {
+        parent.subexpenses.push({
+          id: id(),
+          expenseId: parentExpenseId,
+          name,
+          amount,
+          day,
+          notes,
+        });
+      }
+    }
+
+    saveStore();
     $('#entryDialog').close();
-    if (type !== 'subexpense' && payload.month && payload.month !== state.month) state.month = payload.month;
-    await loadSummary();
-    toast(id ? 'Lançamento atualizado.' : 'Lançamento adicionado.');
+
+    if (type !== 'subexpense' && selectedMonth !== state.month) {
+      state.month = selectedMonth;
+    }
+
+    loadSummary();
+    toast(entryId ? 'Lançamento atualizado.' : 'Lançamento adicionado.');
   } catch (error) {
     $('#entryError').textContent = error.message;
-  } finally {
-    $('#saveEntryBtn').disabled = false;
   }
 }
 
-async function deleteItem(type, id) {
-  const labels = { income: 'este ganho', expense: 'este gasto e todos os subgastos dele', subexpense: 'este subgasto' };
+function deleteItem(type, itemId, parentId = '') {
+  const labels = {
+    income: 'este ganho',
+    expense: 'este gasto e todos os subgastos dele',
+    subexpense: 'este subgasto',
+  };
   if (!confirm(`Excluir ${labels[type]}?`)) return;
-  const path = type === 'income' ? `/api/incomes/${id}` : type === 'expense' ? `/api/expenses/${id}` : `/api/subexpenses/${id}`;
-  try {
-    await api(path, { method: 'DELETE' });
-    await loadSummary();
-    toast('Excluído.');
-  } catch (error) {
-    toast(error.message, true);
+
+  if (type === 'income') {
+    state.store.incomes = state.store.incomes.filter((item) => item.id !== itemId);
+  } else if (type === 'expense') {
+    state.store.expenses = state.store.expenses.filter((item) => item.id !== itemId);
+  } else {
+    const expense = findExpense(parentId);
+    if (expense) expense.subexpenses = expense.subexpenses.filter((item) => item.id !== itemId);
   }
+
+  saveStore();
+  loadSummary();
+  toast('Excluído.');
 }
 
 function toast(message, error = false) {
@@ -268,15 +366,18 @@ function toast(message, error = false) {
 
 $('#prevMonth').addEventListener('click', () => changeMonth(-1));
 $('#nextMonth').addEventListener('click', () => changeMonth(1));
+
 $('#monthLabel').addEventListener('click', () => {
   if ($('#monthInput').showPicker) $('#monthInput').showPicker();
   else $('#monthInput').click();
 });
+
 $('#monthInput').addEventListener('change', (event) => {
   if (!event.target.value) return;
   state.month = event.target.value;
   loadSummary();
 });
+
 $('#addIncomeBtn').addEventListener('click', () => openDialog('income'));
 $('#addExpenseBtn').addEventListener('click', () => openDialog('expense'));
 $('#closeDialogBtn').addEventListener('click', () => $('#entryDialog').close());
@@ -285,7 +386,7 @@ $('#entryForm').addEventListener('submit', saveEntry);
 $('#incomeList').addEventListener('click', (event) => {
   const button = event.target.closest('[data-action]');
   if (!button) return;
-  const item = state.data.incomes.find((row) => row.id === button.dataset.id);
+  const item = findIncome(button.dataset.id);
   if (button.dataset.action === 'edit-income') openDialog('income', item);
   if (button.dataset.action === 'delete-income') deleteItem('income', button.dataset.id);
 });
@@ -293,33 +394,17 @@ $('#incomeList').addEventListener('click', (event) => {
 $('#expenseList').addEventListener('click', (event) => {
   const button = event.target.closest('[data-action]');
   if (!button) return;
-  const { action, id, parent } = button.dataset;
-  if (action === 'edit-expense') openDialog('expense', findExpense(id));
-  if (action === 'delete-expense') deleteItem('expense', id);
-  if (action === 'add-sub') openDialog('subexpense', null, id);
-  if (action === 'edit-sub') openDialog('subexpense', findSub(id), parent);
-  if (action === 'delete-sub') deleteItem('subexpense', id);
+
+  const { action, id: itemId, parent } = button.dataset;
+
+  if (action === 'edit-expense') openDialog('expense', findExpense(itemId));
+  if (action === 'delete-expense') deleteItem('expense', itemId);
+  if (action === 'add-sub') openDialog('subexpense', null, itemId);
+  if (action === 'edit-sub') openDialog('subexpense', findSub(itemId, parent), parent);
+  if (action === 'delete-sub') deleteItem('subexpense', itemId, parent);
 });
 
-$('#loginForm').addEventListener('submit', async (event) => {
-  event.preventDefault();
-  $('#loginError').textContent = '';
-  try {
-    await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ password: $('#passwordInput').value }) });
-    $('#passwordInput').value = '';
-    showApp();
-    await loadSummary();
-  } catch (error) {
-    $('#loginError').textContent = error.message;
-  }
-});
-
-$('#logoutBtn').addEventListener('click', async () => {
-  await api('/api/auth/logout', { method: 'POST' });
-  showLogin();
-});
-
-init().catch((error) => {
-  console.error(error);
-  toast('Não foi possível iniciar o app.', true);
-});
+$('#logoutBtn').classList.add('hidden');
+$('#loginView').classList.add('hidden');
+$('#app').classList.remove('hidden');
+loadSummary();
