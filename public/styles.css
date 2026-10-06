@@ -241,3 +241,9 @@ textarea { resize: vertical; }
   background: var(--surface-2);
   color: var(--text);
 }
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
