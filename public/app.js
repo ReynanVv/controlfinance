@@ -219,7 +219,7 @@ function openDialog(type, item = null, parentExpenseId = '') {
   $('#dialogEyebrow').textContent = item ? 'EDITAR LANÇAMENTO' : 'NOVO LANÇAMENTO';
   $('#dialogTitle').textContent = isSub ? 'Subgasto' : isIncome ? 'Ganho' : 'Gasto';
   $('#nameField').value = item?.name || '';
-  $('#amountField').value = item ? String(isIncome || isSub ? item.amount : item.baseAmount).replace('.', ',') : '';
+  $('#amountField').value = item ? String(isIncome || isSub ? item.amount : item.total).replace('.', ',') : '';
   $('#monthField').value = item?.month || state.month;
   $('#dayField').value = item?.day || '';
   $('#notesField').value = item?.notes || '';
