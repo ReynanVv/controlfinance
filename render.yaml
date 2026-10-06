@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: controlfinance
+    runtime: node
+    plan: free
+    region: virginia
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: controlfinance-db
+          property: connectionString
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: APP_PASSWORD
+        sync: false
+
+databases:
+  - name: controlfinance-db
+    plan: free
+    region: virginia
