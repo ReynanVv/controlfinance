@@ -1,9 +1,10 @@
 services:
   - type: web
-    name: controlfinance
+    name: controlfinance-app
     runtime: node
     plan: free
     region: virginia
+    branch: feature/accounts
     buildCommand: npm install
     startCommand: npm start
     healthCheckPath: /api/health
@@ -11,8 +12,13 @@ services:
       - key: NODE_ENV
         value: production
       - key: DATABASE_URL
-        sync: false
+        fromDatabase:
+          name: controlfinance-db
+          property: connectionString
       - key: SESSION_SECRET
         generateValue: true
-      - key: APP_PASSWORD
-        sync: false
+
+databases:
+  - name: controlfinance-db
+    plan: free
+    region: virginia
