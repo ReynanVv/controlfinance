@@ -1,23 +1,18 @@
 import 'dotenv/config';
 import crypto from 'node:crypto';
+import { promisify } from 'node:util';
 import express from 'express';
 import cookieParser from 'cookie-parser';
 import pg from 'pg';
 
 const { Pool } = pg;
+const scryptAsync = promisify(crypto.scrypt);
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
 const DATABASE_URL = process.env.DATABASE_URL;
-const APP_PASSWORD = process.env.APP_PASSWORD || '';
-const SESSION_SECRET = process.env.SESSION_SECRET || '';
+const SESSION_SECRET = process.env.SESSION_SECRET || 'dev-secret-change-me';
 
-if (!DATABASE_URL) {
-  throw new Error('DATABASE_URL não configurada.');
-}
-
-if (process.env.NODE_ENV === 'production' && (!APP_PASSWORD || !SESSION_SECRET)) {
-  throw new Error('Em produção, APP_PASSWORD e SESSION_SECRET são obrigatórios.');
-}
+if (!DATABASE_URL) throw new Error('DATABASE_URL não configurada.');
 
 const pool = new Pool({
   connectionString: DATABASE_URL,
@@ -25,8 +20,8 @@ const pool = new Pool({
 });
 
 app.disable('x-powered-by');
-app.use(express.json({ limit: '32kb' }));
-app.use(cookieParser(SESSION_SECRET || 'dev-secret'));
+app.use(express.json({ limit: '128kb' }));
+app.use(cookieParser(SESSION_SECRET));
 app.use(express.static('public'));
 
 const monthRegex = /^\d{4}-(0[1-9]|1[0-2])$/;
@@ -36,7 +31,6 @@ function money(value, fieldName = 'valor') {
     if (!Number.isFinite(value) || value < 0) throw new Error(`${fieldName} inválido.`);
     return Math.round(value * 100) / 100;
   }
-
   if (typeof value !== 'string') throw new Error(`${fieldName} inválido.`);
   let normalized = value.trim().replace(/\s/g, '');
   if (normalized.includes(',') && normalized.includes('.')) {
@@ -44,7 +38,6 @@ function money(value, fieldName = 'valor') {
   } else if (normalized.includes(',')) {
     normalized = normalized.replace(',', '.');
   }
-
   const parsed = Number(normalized);
   if (!Number.isFinite(parsed) || parsed < 0) throw new Error(`${fieldName} inválido.`);
   return Math.round(parsed * 100) / 100;
@@ -69,19 +62,54 @@ function text(value, fieldName, required = false, max = 500) {
   return result || null;
 }
 
-function safeCompare(a, b) {
-  const aa = Buffer.from(String(a));
-  const bb = Buffer.from(String(b));
-  return aa.length === bb.length && crypto.timingSafeEqual(aa, bb);
+function normalizeUsername(value) {
+  const username = String(value ?? '').trim();
+  if (username.length < 3 || username.length > 40) throw new Error('Usuário deve ter entre 3 e 40 caracteres.');
+  if (!/^[\p{L}\p{N}._-]+$/u.test(username)) throw new Error('Usuário pode conter letras, números, ponto, hífen e sublinhado.');
+  return { username, key: username.toLocaleLowerCase('pt-BR') };
 }
 
-function signedIn(req) {
-  return req.signedCookies?.controlfinance === 'ok';
+function validatePassword(value) {
+  const password = String(value ?? '');
+  if (password.length < 6) throw new Error('A senha precisa ter pelo menos 6 caracteres.');
+  if (password.length > 200) throw new Error('Senha muito longa.');
+  return password;
+}
+
+async function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const derived = await scryptAsync(password, salt, 64);
+  return `scrypt$${salt}$${Buffer.from(derived).toString('hex')}`;
+}
+
+async function verifyPassword(password, stored) {
+  const [scheme, salt, hash] = String(stored || '').split('$');
+  if (scheme !== 'scrypt' || !salt || !hash) return false;
+  const derived = Buffer.from(await scryptAsync(password, salt, 64));
+  const expected = Buffer.from(hash, 'hex');
+  return derived.length === expected.length && crypto.timingSafeEqual(derived, expected);
+}
+
+function signedInUserId(req) {
+  const value = req.signedCookies?.cf_user;
+  return typeof value === 'string' && /^[0-9a-f-]{36}$/i.test(value) ? value : null;
 }
 
 function requireAuth(req, res, next) {
-  if (!APP_PASSWORD || signedIn(req)) return next();
-  return res.status(401).json({ error: 'Não autenticado.' });
+  const userId = signedInUserId(req);
+  if (!userId) return res.status(401).json({ error: 'Não autenticado.' });
+  req.userId = userId;
+  next();
+}
+
+function setAuthCookie(res, userId) {
+  res.cookie('cf_user', userId, {
+    signed: true,
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: process.env.NODE_ENV === 'production',
+    maxAge: 1000 * 60 * 60 * 24 * 30,
+  });
 }
 
 function asyncRoute(handler) {
@@ -90,8 +118,17 @@ function asyncRoute(handler) {
 
 async function ensureSchema() {
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS incomes (
+    CREATE TABLE IF NOT EXISTS cf_users (
       id UUID PRIMARY KEY,
+      username TEXT NOT NULL,
+      username_key TEXT NOT NULL UNIQUE,
+      password_hash TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS cf_incomes (
+      id UUID PRIMARY KEY,
+      user_id UUID NOT NULL REFERENCES cf_users(id) ON DELETE CASCADE,
       month VARCHAR(7) NOT NULL,
       name TEXT NOT NULL,
       amount NUMERIC(12,2) NOT NULL CHECK (amount >= 0),
@@ -101,8 +138,9 @@ async function ensureSchema() {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
-    CREATE TABLE IF NOT EXISTS expenses (
+    CREATE TABLE IF NOT EXISTS cf_expenses (
       id UUID PRIMARY KEY,
+      user_id UUID NOT NULL REFERENCES cf_users(id) ON DELETE CASCADE,
       month VARCHAR(7) NOT NULL,
       name TEXT NOT NULL,
       base_amount NUMERIC(12,2) NOT NULL CHECK (base_amount >= 0),
@@ -112,9 +150,10 @@ async function ensureSchema() {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
-    CREATE TABLE IF NOT EXISTS subexpenses (
+    CREATE TABLE IF NOT EXISTS cf_subexpenses (
       id UUID PRIMARY KEY,
-      expense_id UUID NOT NULL REFERENCES expenses(id) ON DELETE CASCADE,
+      user_id UUID NOT NULL REFERENCES cf_users(id) ON DELETE CASCADE,
+      expense_id UUID NOT NULL REFERENCES cf_expenses(id) ON DELETE CASCADE,
       name TEXT NOT NULL,
       amount NUMERIC(12,2) NOT NULL CHECK (amount >= 0),
       day SMALLINT CHECK (day BETWEEN 1 AND 31),
@@ -123,71 +162,92 @@ async function ensureSchema() {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
-    CREATE INDEX IF NOT EXISTS idx_incomes_month ON incomes(month);
-    CREATE INDEX IF NOT EXISTS idx_expenses_month ON expenses(month);
-    CREATE INDEX IF NOT EXISTS idx_subexpenses_expense ON subexpenses(expense_id);
+    CREATE INDEX IF NOT EXISTS idx_cf_incomes_user_month ON cf_incomes(user_id, month);
+    CREATE INDEX IF NOT EXISTS idx_cf_expenses_user_month ON cf_expenses(user_id, month);
+    CREATE INDEX IF NOT EXISTS idx_cf_subexpenses_user_expense ON cf_subexpenses(user_id, expense_id);
   `);
 }
 
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
 
-app.get('/api/auth/status', (req, res) => {
-  res.json({ required: Boolean(APP_PASSWORD), authenticated: !APP_PASSWORD || signedIn(req) });
-});
+app.get('/api/auth/status', asyncRoute(async (req, res) => {
+  const userId = signedInUserId(req);
+  if (!userId) return res.json({ authenticated: false, user: null });
 
-app.post('/api/auth/login', (req, res) => {
-  if (!APP_PASSWORD) return res.json({ ok: true });
-  if (!safeCompare(req.body?.password ?? '', APP_PASSWORD)) {
-    return res.status(401).json({ error: 'Senha incorreta.' });
+  const { rows } = await pool.query('SELECT id, username FROM cf_users WHERE id = $1', [userId]);
+  if (!rows[0]) {
+    res.clearCookie('cf_user');
+    return res.json({ authenticated: false, user: null });
+  }
+  res.json({ authenticated: true, user: rows[0] });
+}));
+
+app.post('/api/auth/register', asyncRoute(async (req, res) => {
+  const { username, key } = normalizeUsername(req.body?.username);
+  const password = validatePassword(req.body?.password);
+  const passwordHash = await hashPassword(password);
+  const id = crypto.randomUUID();
+
+  try {
+    const { rows } = await pool.query(
+      `INSERT INTO cf_users (id, username, username_key, password_hash)
+       VALUES ($1, $2, $3, $4)
+       RETURNING id, username`,
+      [id, username, key, passwordHash]
+    );
+    setAuthCookie(res, id);
+    res.status(201).json({ user: rows[0] });
+  } catch (error) {
+    if (error?.code === '23505') return res.status(409).json({ error: 'Esse usuário já existe.' });
+    throw error;
+  }
+}));
+
+app.post('/api/auth/login', asyncRoute(async (req, res) => {
+  const { key } = normalizeUsername(req.body?.username);
+  const password = String(req.body?.password ?? '');
+  const { rows } = await pool.query(
+    'SELECT id, username, password_hash FROM cf_users WHERE username_key = $1',
+    [key]
+  );
+
+  const user = rows[0];
+  if (!user || !(await verifyPassword(password, user.password_hash))) {
+    return res.status(401).json({ error: 'Usuário ou senha incorretos.' });
   }
 
-  res.cookie('controlfinance', 'ok', {
-    signed: true,
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
-    maxAge: 1000 * 60 * 60 * 24 * 30,
-  });
-  res.json({ ok: true });
-});
+  setAuthCookie(res, user.id);
+  res.json({ user: { id: user.id, username: user.username } });
+}));
 
 app.post('/api/auth/logout', (_req, res) => {
-  res.clearCookie('controlfinance');
+  res.clearCookie('cf_user');
   res.json({ ok: true });
 });
 
 app.use('/api', requireAuth);
 
-app.get('/api/months', asyncRoute(async (_req, res) => {
-  const { rows } = await pool.query(`
-    SELECT month FROM incomes
-    UNION
-    SELECT month FROM expenses
-    ORDER BY month DESC
-  `);
-  res.json({ months: rows.map((row) => row.month) });
-}));
-
 app.get('/api/summary', asyncRoute(async (req, res) => {
   const selectedMonth = month(req.query.month);
+  const userId = req.userId;
 
   const [incomeResult, expenseResult] = await Promise.all([
     pool.query(`
       SELECT id, month, name, amount::float8 AS amount, day, notes
-      FROM incomes
-      WHERE month = $1
+      FROM cf_incomes
+      WHERE user_id = $1 AND month = $2
       ORDER BY day NULLS LAST, created_at
-    `, [selectedMonth]),
+    `, [userId, selectedMonth]),
     pool.query(`
       SELECT
         e.id, e.month, e.name, e.base_amount::float8 AS "baseAmount", e.day, e.notes,
         COALESCE(SUM(s.amount), 0)::float8 AS "subTotal"
-      FROM expenses e
-      LEFT JOIN subexpenses s ON s.expense_id = e.id
-      WHERE e.month = $1
+      FROM cf_expenses e
+      LEFT JOIN cf_subexpenses s ON s.expense_id = e.id AND s.user_id = e.user_id
+      WHERE e.user_id = $1 AND e.month = $2
       GROUP BY e.id
       ORDER BY e.day NULLS LAST, e.created_at
-    `, [selectedMonth]),
+    `, [userId, selectedMonth]),
   ]);
 
   const expenseIds = expenseResult.rows.map((item) => item.id);
@@ -195,10 +255,10 @@ app.get('/api/summary', asyncRoute(async (req, res) => {
   if (expenseIds.length) {
     const result = await pool.query(`
       SELECT id, expense_id AS "expenseId", name, amount::float8 AS amount, day, notes
-      FROM subexpenses
-      WHERE expense_id = ANY($1::uuid[])
+      FROM cf_subexpenses
+      WHERE user_id = $1 AND expense_id = ANY($2::uuid[])
       ORDER BY day NULLS LAST, created_at
-    `, [expenseIds]);
+    `, [userId, expenseIds]);
     subRows = result.rows;
   }
 
@@ -240,10 +300,10 @@ app.post('/api/incomes', asyncRoute(async (req, res) => {
   };
 
   const { rows } = await pool.query(`
-    INSERT INTO incomes (id, month, name, amount, day, notes)
-    VALUES ($1, $2, $3, $4, $5, $6)
+    INSERT INTO cf_incomes (id, user_id, month, name, amount, day, notes)
+    VALUES ($1, $2, $3, $4, $5, $6, $7)
     RETURNING id, month, name, amount::float8 AS amount, day, notes
-  `, [id, payload.month, payload.name, payload.amount, payload.day, payload.notes]);
+  `, [id, req.userId, payload.month, payload.name, payload.amount, payload.day, payload.notes]);
   res.status(201).json(rows[0]);
 }));
 
@@ -257,18 +317,18 @@ app.put('/api/incomes/:id', asyncRoute(async (req, res) => {
   };
 
   const { rows } = await pool.query(`
-    UPDATE incomes
-    SET month = $2, name = $3, amount = $4, day = $5, notes = $6, updated_at = NOW()
-    WHERE id = $1
+    UPDATE cf_incomes
+    SET month = $3, name = $4, amount = $5, day = $6, notes = $7, updated_at = NOW()
+    WHERE id = $1 AND user_id = $2
     RETURNING id, month, name, amount::float8 AS amount, day, notes
-  `, [req.params.id, payload.month, payload.name, payload.amount, payload.day, payload.notes]);
+  `, [req.params.id, req.userId, payload.month, payload.name, payload.amount, payload.day, payload.notes]);
 
   if (!rows[0]) return res.status(404).json({ error: 'Ganho não encontrado.' });
   res.json(rows[0]);
 }));
 
 app.delete('/api/incomes/:id', asyncRoute(async (req, res) => {
-  const result = await pool.query('DELETE FROM incomes WHERE id = $1', [req.params.id]);
+  const result = await pool.query('DELETE FROM cf_incomes WHERE id = $1 AND user_id = $2', [req.params.id, req.userId]);
   if (!result.rowCount) return res.status(404).json({ error: 'Ganho não encontrado.' });
   res.status(204).end();
 }));
@@ -284,10 +344,10 @@ app.post('/api/expenses', asyncRoute(async (req, res) => {
   };
 
   const { rows } = await pool.query(`
-    INSERT INTO expenses (id, month, name, base_amount, day, notes)
-    VALUES ($1, $2, $3, $4, $5, $6)
+    INSERT INTO cf_expenses (id, user_id, month, name, base_amount, day, notes)
+    VALUES ($1, $2, $3, $4, $5, $6, $7)
     RETURNING id, month, name, base_amount::float8 AS "baseAmount", day, notes
-  `, [id, payload.month, payload.name, payload.baseAmount, payload.day, payload.notes]);
+  `, [id, req.userId, payload.month, payload.name, payload.baseAmount, payload.day, payload.notes]);
   res.status(201).json(rows[0]);
 }));
 
@@ -301,24 +361,27 @@ app.put('/api/expenses/:id', asyncRoute(async (req, res) => {
   };
 
   const { rows } = await pool.query(`
-    UPDATE expenses
-    SET month = $2, name = $3, base_amount = $4, day = $5, notes = $6, updated_at = NOW()
-    WHERE id = $1
+    UPDATE cf_expenses
+    SET month = $3, name = $4, base_amount = $5, day = $6, notes = $7, updated_at = NOW()
+    WHERE id = $1 AND user_id = $2
     RETURNING id, month, name, base_amount::float8 AS "baseAmount", day, notes
-  `, [req.params.id, payload.month, payload.name, payload.baseAmount, payload.day, payload.notes]);
+  `, [req.params.id, req.userId, payload.month, payload.name, payload.baseAmount, payload.day, payload.notes]);
 
   if (!rows[0]) return res.status(404).json({ error: 'Gasto não encontrado.' });
   res.json(rows[0]);
 }));
 
 app.delete('/api/expenses/:id', asyncRoute(async (req, res) => {
-  const result = await pool.query('DELETE FROM expenses WHERE id = $1', [req.params.id]);
+  const result = await pool.query('DELETE FROM cf_expenses WHERE id = $1 AND user_id = $2', [req.params.id, req.userId]);
   if (!result.rowCount) return res.status(404).json({ error: 'Gasto não encontrado.' });
   res.status(204).end();
 }));
 
 app.post('/api/expenses/:expenseId/subexpenses', asyncRoute(async (req, res) => {
-  const expenseExists = await pool.query('SELECT 1 FROM expenses WHERE id = $1', [req.params.expenseId]);
+  const expenseExists = await pool.query(
+    'SELECT 1 FROM cf_expenses WHERE id = $1 AND user_id = $2',
+    [req.params.expenseId, req.userId]
+  );
   if (!expenseExists.rowCount) return res.status(404).json({ error: 'Gasto não encontrado.' });
 
   const id = crypto.randomUUID();
@@ -330,10 +393,10 @@ app.post('/api/expenses/:expenseId/subexpenses', asyncRoute(async (req, res) => 
   };
 
   const { rows } = await pool.query(`
-    INSERT INTO subexpenses (id, expense_id, name, amount, day, notes)
-    VALUES ($1, $2, $3, $4, $5, $6)
+    INSERT INTO cf_subexpenses (id, user_id, expense_id, name, amount, day, notes)
+    VALUES ($1, $2, $3, $4, $5, $6, $7)
     RETURNING id, expense_id AS "expenseId", name, amount::float8 AS amount, day, notes
-  `, [id, req.params.expenseId, payload.name, payload.amount, payload.day, payload.notes]);
+  `, [id, req.userId, req.params.expenseId, payload.name, payload.amount, payload.day, payload.notes]);
   res.status(201).json(rows[0]);
 }));
 
@@ -346,25 +409,74 @@ app.put('/api/subexpenses/:id', asyncRoute(async (req, res) => {
   };
 
   const { rows } = await pool.query(`
-    UPDATE subexpenses
-    SET name = $2, amount = $3, day = $4, notes = $5, updated_at = NOW()
-    WHERE id = $1
+    UPDATE cf_subexpenses
+    SET name = $3, amount = $4, day = $5, notes = $6, updated_at = NOW()
+    WHERE id = $1 AND user_id = $2
     RETURNING id, expense_id AS "expenseId", name, amount::float8 AS amount, day, notes
-  `, [req.params.id, payload.name, payload.amount, payload.day, payload.notes]);
+  `, [req.params.id, req.userId, payload.name, payload.amount, payload.day, payload.notes]);
 
   if (!rows[0]) return res.status(404).json({ error: 'Subgasto não encontrado.' });
   res.json(rows[0]);
 }));
 
 app.delete('/api/subexpenses/:id', asyncRoute(async (req, res) => {
-  const result = await pool.query('DELETE FROM subexpenses WHERE id = $1', [req.params.id]);
+  const result = await pool.query('DELETE FROM cf_subexpenses WHERE id = $1 AND user_id = $2', [req.params.id, req.userId]);
   if (!result.rowCount) return res.status(404).json({ error: 'Subgasto não encontrado.' });
   res.status(204).end();
 }));
 
+app.post('/api/import-local', asyncRoute(async (req, res) => {
+  const incomes = Array.isArray(req.body?.incomes) ? req.body.incomes : [];
+  const expenses = Array.isArray(req.body?.expenses) ? req.body.expenses : [];
+  if (incomes.length + expenses.length > 1000) return res.status(400).json({ error: 'Importação grande demais.' });
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    for (const item of incomes) {
+      await client.query(
+        `INSERT INTO cf_incomes (id, user_id, month, name, amount, day, notes)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [crypto.randomUUID(), req.userId, month(item.month), text(item.name, 'Nome', true, 120), money(item.amount), day(item.day), text(item.notes, 'Observação', false, 500)]
+      );
+    }
+
+    for (const expense of expenses) {
+      const expenseId = crypto.randomUUID();
+      await client.query(
+        `INSERT INTO cf_expenses (id, user_id, month, name, base_amount, day, notes)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [expenseId, req.userId, month(expense.month), text(expense.name, 'Nome', true, 120), money(expense.baseAmount), day(expense.day), text(expense.notes, 'Observação', false, 500)]
+      );
+
+      const subs = Array.isArray(expense.subexpenses) ? expense.subexpenses : [];
+      for (const sub of subs) {
+        await client.query(
+          `INSERT INTO cf_subexpenses (id, user_id, expense_id, name, amount, day, notes)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [crypto.randomUUID(), req.userId, expenseId, text(sub.name, 'Nome', true, 120), money(sub.amount), day(sub.day), text(sub.notes, 'Observação', false, 500)]
+        );
+      }
+    }
+
+    await client.query('COMMIT');
+    res.json({ ok: true, imported: incomes.length + expenses.length });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}));
+
+app.get('*', (_req, res) => {
+  res.sendFile(new URL('./public/index.html', import.meta.url).pathname);
+});
+
 app.use((error, _req, res, _next) => {
   console.error(error);
-  const isUserError = error instanceof Error && /inválid|obrigat|longo|Dia deve|Mês inválido/i.test(error.message);
+  const isUserError = error instanceof Error && /inválid|obrigat|longo|Dia deve|Mês inválido|senha|usuário/i.test(error.message);
   res.status(isUserError ? 400 : 500).json({ error: isUserError ? error.message : 'Erro interno do servidor.' });
 });
 
