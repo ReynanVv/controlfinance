@@ -12,12 +12,23 @@
     <form id="loginForm" class="login-card">
       <div class="brand-mark">CF</div>
       <h1>Control Finance</h1>
-      <p>Suas finanças, do seu jeito.</p>
+      <p id="authSubtitle">Entre na sua conta para acessar seu histórico.</p>
+
+      <div class="auth-switch">
+        <button id="loginModeBtn" type="button" class="auth-tab active">Entrar</button>
+        <button id="registerModeBtn" type="button" class="auth-tab">Criar conta</button>
+      </div>
+
+      <label>
+        Usuário
+        <input id="usernameInput" maxlength="40" autocomplete="username" placeholder="Ex.: reynan" required autofocus />
+      </label>
       <label>
         Senha
-        <input id="passwordInput" type="password" autocomplete="current-password" required autofocus />
+        <input id="passwordInput" type="password" minlength="6" autocomplete="current-password" required />
       </label>
-      <button class="primary-btn" type="submit">Entrar</button>
+
+      <button id="authSubmitBtn" class="primary-btn" type="submit">Entrar</button>
       <p id="loginError" class="form-error"></p>
     </form>
   </div>
@@ -27,8 +38,9 @@
       <div>
         <p class="eyebrow">CONTROLE FINANCEIRO</p>
         <h1>Control Finance</h1>
+        <p id="accountLabel" class="account-label"></p>
       </div>
-      <button id="logoutBtn" class="icon-btn subtle hidden" title="Sair" aria-label="Sair">↗</button>
+      <button id="logoutBtn" class="icon-btn subtle" title="Sair" aria-label="Sair">↗</button>
     </header>
 
     <section class="month-picker">
@@ -63,20 +75,14 @@
 
     <section class="content-section">
       <div class="section-heading">
-        <div>
-          <span class="section-kicker">ENTRADAS</span>
-          <h2>Ganhos</h2>
-        </div>
+        <div><span class="section-kicker">ENTRADAS</span><h2>Ganhos</h2></div>
       </div>
       <div id="incomeList" class="entry-list"></div>
     </section>
 
     <section class="content-section">
       <div class="section-heading">
-        <div>
-          <span class="section-kicker">SAÍDAS</span>
-          <h2>Gastos</h2>
-        </div>
+        <div><span class="section-kicker">SAÍDAS</span><h2>Gastos</h2></div>
         <span class="section-note">Subgastos entram no total do gasto</span>
       </div>
       <div id="expenseList" class="entry-list"></div>
@@ -86,10 +92,7 @@
   <dialog id="entryDialog" class="entry-dialog">
     <form id="entryForm" method="dialog">
       <div class="dialog-head">
-        <div>
-          <p id="dialogEyebrow" class="eyebrow"></p>
-          <h2 id="dialogTitle"></h2>
-        </div>
+        <div><p id="dialogEyebrow" class="eyebrow"></p><h2 id="dialogTitle"></h2></div>
         <button id="closeDialogBtn" type="button" class="icon-btn subtle" aria-label="Fechar">×</button>
       </div>
 
@@ -97,29 +100,11 @@
       <input id="entryType" type="hidden" />
       <input id="parentExpenseId" type="hidden" />
 
-      <label>
-        Nome
-        <input id="nameField" maxlength="120" placeholder="Ex.: Santander, salário, Spotify" required />
-      </label>
-      <label>
-        Valor
-        <div class="money-field">
-          <span>R$</span>
-          <input id="amountField" inputmode="decimal" placeholder="0,00" required />
-        </div>
-      </label>
-      <label id="monthFieldWrap">
-        Mês
-        <input id="monthField" type="month" required />
-      </label>
-      <label>
-        Dia do mês <span class="optional">opcional</span>
-        <input id="dayField" type="number" min="1" max="31" placeholder="Ex.: 10" />
-      </label>
-      <label>
-        Observação <span class="optional">opcional</span>
-        <textarea id="notesField" rows="3" maxlength="500" placeholder="Qualquer detalhe que você queira lembrar"></textarea>
-      </label>
+      <label>Nome<input id="nameField" maxlength="120" placeholder="Ex.: Santander, salário, Spotify" required /></label>
+      <label>Valor<div class="money-field"><span>R$</span><input id="amountField" inputmode="decimal" placeholder="0,00" required /></div></label>
+      <label id="monthFieldWrap">Mês<input id="monthField" type="month" required /></label>
+      <label>Dia do mês <span class="optional">opcional</span><input id="dayField" type="number" min="1" max="31" placeholder="Ex.: 10" /></label>
+      <label>Observação <span class="optional">opcional</span><textarea id="notesField" rows="3" maxlength="500" placeholder="Qualquer detalhe que você queira lembrar"></textarea></label>
 
       <p id="entryError" class="form-error"></p>
       <button id="saveEntryBtn" class="primary-btn" type="submit">Salvar</button>
