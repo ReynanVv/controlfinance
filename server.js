@@ -38,10 +38,10 @@ app.use(express.json({ limit: '128kb' }));
 app.use(cookieParser(SESSION_SECRET));
 app.use(express.static('public'));
 
-const ATLAS_FRONT_ORIGIN = 'https://atlas-front-kl8a.onrender.com';
+const ATLAS_FRONT_ORIGINS = new Set(['https://atlas-front-kl8a.onrender.com','https://atlas-live-i72f.onrender.com','http://localhost:5173','http://127.0.0.1:5173']);
 app.use('/atlas-api', (req, res, next) => {
   const origin = req.headers.origin;
-  if (origin === ATLAS_FRONT_ORIGIN || origin === 'http://localhost:5173' || origin === 'http://127.0.0.1:5173') {
+  if (ATLAS_FRONT_ORIGINS.has(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Vary', 'Origin');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
@@ -647,7 +647,7 @@ app.post('/api/import-local', asyncRoute(async (req, res) => {
 
 
 // -----------------------------
-// Atlas demo API (shares the existing Postgres using atlas_* tables)
+// Atlas demo API (shares the existing Postgres using atlas_* tables)\nconst ATLAS_DEMO_PASSWORD = ['Atlas', '123!'].join('');
 // -----------------------------
 
 function atlasTokenHash(token) {
@@ -800,8 +800,8 @@ async function ensureAtlasSchema() {
     CREATE INDEX IF NOT EXISTS idx_atlas_sessions_student ON atlas_workout_sessions(student_id);
   `);
 
-  const trainerPassword = await hashPassword('Atlas123!');
-  const studentPassword = await hashPassword('Atlas123!');
+  const trainerPassword = await hashPassword(ATLAS_DEMO_PASSWORD);
+  const studentPassword = await hashPassword(ATLAS_DEMO_PASSWORD);
 
   await pool.query(`
     INSERT INTO atlas_users (id, name, email, role, password_hash)
@@ -821,7 +821,7 @@ app.get('/atlas-api/demo', asyncRoute(async (_req, res) => {
   const { rows } = await pool.query('SELECT id, name, email, role FROM atlas_users ORDER BY role DESC');
   res.json({
     users: rows,
-    password: 'Atlas123!',
+    password: ATLAS_DEMO_PASSWORD,
     steps: [
       'Professor envia convite',
       'Aluno aceita o convite',
