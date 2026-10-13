@@ -875,6 +875,27 @@ app.post('/atlas-api/auth/login', authLimit, asyncRoute(async (req, res) => {
   });
 }));
 
+app.post('/atlas-api/auth/demo-login', asyncRoute(async (req, res) => {
+  const role = req.body?.role === 'trainer' ? 'trainer' : req.body?.role === 'student' ? 'student' : null;
+  if (!role) return res.status(400).json({ error: 'Perfil inválido.' });
+
+  const { rows } = await pool.query(
+    'SELECT id, name, email, role FROM atlas_users WHERE role = $1 ORDER BY created_at LIMIT 1',
+    [role]
+  );
+  const user = rows[0];
+  if (!user) return res.status(404).json({ error: 'Usuário de demonstração não encontrado.' });
+
+  const token = crypto.randomBytes(32).toString('hex');
+  await pool.query(
+    `INSERT INTO atlas_sessions (id, user_id, token_hash, expires_at)
+     VALUES ($1, $2, $3, NOW() + INTERVAL '7 days')`,
+    [crypto.randomUUID(), user.id, atlasTokenHash(token)]
+  );
+
+  res.json({ token, user });
+}));
+
 app.post('/atlas-api/auth/logout', atlasRequireAuth, asyncRoute(async (req, res) => {
   await pool.query('DELETE FROM atlas_sessions WHERE token_hash = $1', [req.atlasTokenHash]);
   res.json({ ok: true });
