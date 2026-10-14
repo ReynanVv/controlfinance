@@ -1026,38 +1026,45 @@ app.post('/atlas-api/invitations/accept-token', atlasRequireAuth, atlasRole('stu
 
   const inviteHash = atlasInviteHash(rawToken);
   const { rows } = await pool.query(
-    `SELECT id, trainer_id, student_email, accepted_at, expires_at
+    `SELECT id, trainer_id, accepted_at, expires_at
      FROM atlas_invitations
      WHERE token_hash = $1`,
     [inviteHash]
   );
   const invitation = rows[0];
   if (!invitation) return res.status(404).json({ error: 'Convite inválido.' });
-  if (invitation.student_email !== req.atlasUser.email) {
-    return res.status(403).json({ error: 'Este convite foi enviado para outro e-mail.' });
-  }
+  if (invitation.accepted_at) return res.status(409).json({ error: 'Este convite já foi aceito.' });
   if (invitation.expires_at && new Date(invitation.expires_at) < new Date()) {
     return res.status(410).json({ error: 'Este convite expirou. Solicite um novo link ao treinador.' });
   }
 
-  if (!invitation.accepted_at) {
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-      await client.query('UPDATE atlas_invitations SET accepted_at = NOW() WHERE id = $1', [invitation.id]);
-      await client.query(
-        `INSERT INTO atlas_trainer_students (id, trainer_id, student_id)
-         VALUES ($1, $2, $3)
-         ON CONFLICT (trainer_id, student_id) DO NOTHING`,
-        [crypto.randomUUID(), invitation.trainer_id, req.atlasUser.id]
-      );
-      await client.query('COMMIT');
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
+  const alreadyLinked = await pool.query(
+    'SELECT 1 FROM atlas_trainer_students WHERE trainer_id = $1 AND student_id = $2',
+    [invitation.trainer_id, req.atlasUser.id]
+  );
+  if (alreadyLinked.rowCount) {
+    return res.status(409).json({ error: 'Você já está vinculado a este treinador.' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(
+      'UPDATE atlas_invitations SET accepted_at = NOW(), student_email = $2 WHERE id = $1',
+      [invitation.id, req.atlasUser.email]
+    );
+    await client.query(
+      `INSERT INTO atlas_trainer_students (id, trainer_id, student_id)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (trainer_id, student_id) DO NOTHING`,
+      [crypto.randomUUID(), invitation.trainer_id, req.atlasUser.id]
+    );
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
   }
 
   res.json({ id: invitation.id, status: 'Accepted' });
