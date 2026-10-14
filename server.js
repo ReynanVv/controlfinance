@@ -1093,31 +1093,64 @@ app.get('/atlas-api/invitations', atlasRequireAuth, asyncRoute(async (req, res) 
 
 app.post('/atlas-api/invitations', atlasRequireAuth, atlasRole('trainer'), asyncRoute(async (req, res) => {
   const studentEmail = String(req.body?.studentEmail || '').trim().toLowerCase();
-  const { rows: students } = await pool.query(
-    `SELECT id, name, email FROM atlas_users WHERE email = $1 AND role = 'student'`,
+  if (!studentEmail || !studentEmail.includes('@')) {
+    return res.status(400).json({ error: 'Informe um e-mail válido.' });
+  }
+
+  const { rows: existingUsers } = await pool.query(
+    `SELECT id, name, email, role FROM atlas_users WHERE email = $1`,
     [studentEmail]
   );
-  const student = students[0];
-  if (!student) return res.status(404).json({ error: 'Aluno não encontrado. Para o teste use aluno@atlas.test.' });
+  const existingUser = existingUsers[0];
+  if (existingUser && existingUser.role !== 'student') {
+    return res.status(400).json({ error: 'Este e-mail pertence a uma conta que não é de aluno.' });
+  }
 
-  const linked = await pool.query(
-    'SELECT 1 FROM atlas_trainer_students WHERE trainer_id = $1 AND student_id = $2',
-    [req.atlasUser.id, student.id]
-  );
-  if (linked.rowCount) return res.status(409).json({ error: 'Aluno já vinculado a este professor.' });
+  if (existingUser) {
+    const linked = await pool.query(
+      'SELECT 1 FROM atlas_trainer_students WHERE trainer_id = $1 AND student_id = $2',
+      [req.atlasUser.id, existingUser.id]
+    );
+    if (linked.rowCount) return res.status(409).json({ error: 'Aluno já vinculado a este professor.' });
+  }
 
+  const inviteToken = crypto.randomBytes(32).toString('hex');
+  const tokenHash = atlasInviteHash(inviteToken);
   const pending = await pool.query(
-    'SELECT id FROM atlas_invitations WHERE trainer_id = $1 AND student_email = $2 AND accepted_at IS NULL',
+    `SELECT id FROM atlas_invitations
+     WHERE trainer_id = $1 AND student_email = $2 AND accepted_at IS NULL
+     ORDER BY created_at DESC LIMIT 1`,
     [req.atlasUser.id, studentEmail]
   );
-  if (pending.rows[0]) return res.json({ id: pending.rows[0].id, studentEmail, status: 'Pending' });
 
-  const id = crypto.randomUUID();
-  await pool.query(
-    'INSERT INTO atlas_invitations (id, trainer_id, student_email) VALUES ($1, $2, $3)',
-    [id, req.atlasUser.id, studentEmail]
-  );
-  res.status(201).json({ id, studentEmail, status: 'Pending' });
+  let invitationId;
+  if (pending.rows[0]) {
+    invitationId = pending.rows[0].id;
+    await pool.query(
+      `UPDATE atlas_invitations
+       SET token_hash = $2, expires_at = NOW() + INTERVAL '7 days', created_at = NOW()
+       WHERE id = $1`,
+      [invitationId, tokenHash]
+    );
+  } else {
+    invitationId = crypto.randomUUID();
+    await pool.query(
+      `INSERT INTO atlas_invitations
+        (id, trainer_id, student_email, token_hash, expires_at)
+       VALUES ($1, $2, $3, $4, NOW() + INTERVAL '7 days')`,
+      [invitationId, req.atlasUser.id, studentEmail, tokenHash]
+    );
+  }
+
+  const inviteUrl = `https://atlas-front-kl8a.onrender.com/?invite=${inviteToken}`;
+  res.status(201).json({
+    id: invitationId,
+    studentEmail,
+    status: 'Pending',
+    accountExists: Boolean(existingUser),
+    inviteUrl,
+    expiresInDays: 7,
+  });
 }));
 
 app.post('/atlas-api/invitations/:id/accept', atlasRequireAuth, atlasRole('student'), asyncRoute(async (req, res) => {
