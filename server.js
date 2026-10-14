@@ -817,6 +817,7 @@ async function ensureAtlasSchema() {
   `);
 
   await pool.query(`
+    ALTER TABLE atlas_invitations ALTER COLUMN student_email DROP NOT NULL;
     ALTER TABLE atlas_invitations ADD COLUMN IF NOT EXISTS token_hash TEXT;
     ALTER TABLE atlas_invitations ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
     CREATE UNIQUE INDEX IF NOT EXISTS idx_atlas_invites_token_hash
