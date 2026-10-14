@@ -647,7 +647,8 @@ app.post('/api/import-local', asyncRoute(async (req, res) => {
 
 
 // -----------------------------
-// Atlas demo API (shares the existing Postgres using atlas_* tables)\nconst ATLAS_DEMO_PASSWORD = ['Atlas', '123!'].join('');
+// Atlas demo API (shares the existing Postgres using atlas_* tables)
+const ATLAS_DEMO_PASSWORD = process.env.ATLAS_DEMO_PASSWORD || crypto.randomUUID();
 // -----------------------------
 
 function atlasTokenHash(token) {
