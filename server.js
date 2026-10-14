@@ -872,6 +872,80 @@ app.post('/atlas-api/demo/reset', asyncRoute(async (req, res) => {
   res.json({ ok: true, message: 'Fluxo Atlas reiniciado. Os dois usuários de teste foram preservados.' });
 }));
 
+app.post('/atlas-api/auth/register', authLimit, asyncRoute(async (req, res) => {
+  const name = text(req.body?.name, 'Nome', true, 120);
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  const password = String(req.body?.password || '');
+  const inviteToken = String(req.body?.inviteToken || '').trim();
+  const requestedRole = req.body?.role === 'trainer' ? 'trainer' : 'student';
+
+  if (!email || !email.includes('@')) return res.status(400).json({ error: 'Informe um e-mail válido.' });
+  if (password.length < 8) return res.status(400).json({ error: 'A senha precisa ter pelo menos 8 caracteres.' });
+
+  const existing = await pool.query('SELECT id FROM atlas_users WHERE email = $1', [email]);
+  if (existing.rowCount) return res.status(409).json({ error: 'Já existe uma conta com este e-mail.' });
+
+  let invitation = null;
+  let role = requestedRole;
+  if (inviteToken) {
+    const inviteHash = atlasInviteHash(inviteToken);
+    const { rows } = await pool.query(
+      `SELECT id, trainer_id, student_email, accepted_at, expires_at
+       FROM atlas_invitations
+       WHERE token_hash = $1`,
+      [inviteHash]
+    );
+    invitation = rows[0];
+    if (!invitation) return res.status(404).json({ error: 'Convite inválido.' });
+    if (invitation.accepted_at) return res.status(409).json({ error: 'Este convite já foi aceito.' });
+    if (invitation.expires_at && new Date(invitation.expires_at) < new Date()) {
+      return res.status(410).json({ error: 'Este convite expirou. Solicite um novo link ao treinador.' });
+    }
+    if (invitation.student_email !== email) {
+      return res.status(400).json({ error: 'Use o mesmo e-mail para o qual o convite foi enviado.' });
+    }
+    role = 'student';
+  }
+
+  const userId = crypto.randomUUID();
+  const passwordHash = await hashPassword(password);
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(
+      'INSERT INTO atlas_users (id, name, email, role, password_hash) VALUES ($1, $2, $3, $4, $5)',
+      [userId, name, email, role, passwordHash]
+    );
+
+    if (invitation) {
+      await client.query(
+        'UPDATE atlas_invitations SET accepted_at = NOW() WHERE id = $1',
+        [invitation.id]
+      );
+      await client.query(
+        `INSERT INTO atlas_trainer_students (id, trainer_id, student_id)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (trainer_id, student_id) DO NOTHING`,
+        [crypto.randomUUID(), invitation.trainer_id, userId]
+      );
+    }
+
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+
+  const token = await atlasCreateSession(userId);
+  res.status(201).json({
+    token,
+    user: { id: userId, name, email, role },
+    invitationAccepted: Boolean(invitation),
+  });
+}));
+
 app.post('/atlas-api/auth/login', authLimit, asyncRoute(async (req, res) => {
   const email = String(req.body?.email || '').trim().toLowerCase();
   const password = String(req.body?.password || '');
@@ -928,6 +1002,69 @@ app.post('/atlas-api/auth/logout', atlasRequireAuth, asyncRoute(async (req, res)
 app.get('/atlas-api/me', atlasRequireAuth, (req, res) => {
   res.json({ user: req.atlasUser });
 });
+
+app.get('/atlas-api/invitations/resolve/:token', asyncRoute(async (req, res) => {
+  const inviteHash = atlasInviteHash(req.params.token);
+  const { rows } = await pool.query(
+    `SELECT i.id, i.student_email AS "studentEmail", i.accepted_at AS "acceptedAt",
+            i.expires_at AS "expiresAt", t.name AS "trainerName",
+            EXISTS(SELECT 1 FROM atlas_users u WHERE u.email = i.student_email) AS "accountExists"
+     FROM atlas_invitations i
+     JOIN atlas_users t ON t.id = i.trainer_id
+     WHERE i.token_hash = $1`,
+    [inviteHash]
+  );
+  const invitation = rows[0];
+  if (!invitation) return res.status(404).json({ error: 'Convite inválido.' });
+  if (invitation.acceptedAt) return res.status(409).json({ error: 'Este convite já foi aceito.' });
+  if (invitation.expiresAt && new Date(invitation.expiresAt) < new Date()) {
+    return res.status(410).json({ error: 'Este convite expirou. Solicite um novo link ao treinador.' });
+  }
+  res.json(invitation);
+}));
+
+app.post('/atlas-api/invitations/accept-token', atlasRequireAuth, atlasRole('student'), asyncRoute(async (req, res) => {
+  const rawToken = String(req.body?.token || '').trim();
+  if (!rawToken) return res.status(400).json({ error: 'Token de convite ausente.' });
+
+  const inviteHash = atlasInviteHash(rawToken);
+  const { rows } = await pool.query(
+    `SELECT id, trainer_id, student_email, accepted_at, expires_at
+     FROM atlas_invitations
+     WHERE token_hash = $1`,
+    [inviteHash]
+  );
+  const invitation = rows[0];
+  if (!invitation) return res.status(404).json({ error: 'Convite inválido.' });
+  if (invitation.student_email !== req.atlasUser.email) {
+    return res.status(403).json({ error: 'Este convite foi enviado para outro e-mail.' });
+  }
+  if (invitation.expires_at && new Date(invitation.expires_at) < new Date()) {
+    return res.status(410).json({ error: 'Este convite expirou. Solicite um novo link ao treinador.' });
+  }
+
+  if (!invitation.accepted_at) {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('UPDATE atlas_invitations SET accepted_at = NOW() WHERE id = $1', [invitation.id]);
+      await client.query(
+        `INSERT INTO atlas_trainer_students (id, trainer_id, student_id)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (trainer_id, student_id) DO NOTHING`,
+        [crypto.randomUUID(), invitation.trainer_id, req.atlasUser.id]
+      );
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  res.json({ id: invitation.id, status: 'Accepted' });
+}));
 
 app.get('/atlas-api/invitations', atlasRequireAuth, asyncRoute(async (req, res) => {
   if (req.atlasUser.role === 'trainer') {
