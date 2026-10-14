@@ -902,9 +902,6 @@ app.post('/atlas-api/auth/register', authLimit, asyncRoute(async (req, res) => {
     if (invitation.expires_at && new Date(invitation.expires_at) < new Date()) {
       return res.status(410).json({ error: 'Este convite expirou. Solicite um novo link ao treinador.' });
     }
-    if (invitation.student_email !== email) {
-      return res.status(400).json({ error: 'Use o mesmo e-mail para o qual o convite foi enviado.' });
-    }
     role = 'student';
   }
 
@@ -920,8 +917,8 @@ app.post('/atlas-api/auth/register', authLimit, asyncRoute(async (req, res) => {
 
     if (invitation) {
       await client.query(
-        'UPDATE atlas_invitations SET accepted_at = NOW() WHERE id = $1',
-        [invitation.id]
+        'UPDATE atlas_invitations SET accepted_at = NOW(), student_email = $2 WHERE id = $1',
+        [invitation.id, email]
       );
       await client.query(
         `INSERT INTO atlas_trainer_students (id, trainer_id, student_id)
@@ -1007,9 +1004,8 @@ app.get('/atlas-api/me', atlasRequireAuth, (req, res) => {
 app.get('/atlas-api/invitations/resolve/:token', asyncRoute(async (req, res) => {
   const inviteHash = atlasInviteHash(req.params.token);
   const { rows } = await pool.query(
-    `SELECT i.id, i.student_email AS "studentEmail", i.accepted_at AS "acceptedAt",
-            i.expires_at AS "expiresAt", t.name AS "trainerName",
-            EXISTS(SELECT 1 FROM atlas_users u WHERE u.email = i.student_email) AS "accountExists"
+    `SELECT i.id, i.accepted_at AS "acceptedAt", i.expires_at AS "expiresAt",
+            t.name AS "trainerName"
      FROM atlas_invitations i
      JOIN atlas_users t ON t.id = i.trainer_id
      WHERE i.token_hash = $1`,
