@@ -1262,8 +1262,10 @@ app.use((error, _req, res, _next) => {
   res.status(isUserError ? 400 : 500).json({ error: isUserError ? error.message : 'Erro interno do servidor.' });
 });
 
-await ensureSchema();
-await ensureAtlasSchema();
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`ControlFinance rodando na porta ${PORT}`);
 });
+
+Promise.all([ensureSchema(), ensureAtlasSchema()])
+  .then(() => console.log('Schemas ControlFinance/Atlas verificados.'))
+  .catch((error) => console.error('Falha ao verificar schemas:', error));
