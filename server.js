@@ -1276,11 +1276,11 @@ function atlasDemoRedirect(res, role, message = '', error = '') {
 async function atlasDemoState() {
   const [inviteResult, linkResult, availabilityResult, workoutsResult] = await Promise.all([
     pool.query(
-      \`SELECT id, accepted_at
+      `SELECT id, accepted_at
        FROM atlas_invitations
        WHERE trainer_id = $1 AND student_email = $2
        ORDER BY created_at DESC
-       LIMIT 1\`,
+       LIMIT 1`,
       [ATLAS_DEMO_TRAINER_ID, ATLAS_DEMO_STUDENT_EMAIL]
     ),
     pool.query(
@@ -1292,7 +1292,7 @@ async function atlasDemoState() {
       [ATLAS_DEMO_STUDENT_ID]
     ),
     pool.query(
-      \`SELECT w.id, w.name, w.model, w.scheduled_days,
+      `SELECT w.id, w.name, w.model, w.scheduled_days,
               latest.id AS session_id,
               latest.started_at,
               latest.completed_at
@@ -1305,7 +1305,7 @@ async function atlasDemoState() {
          LIMIT 1
        ) latest ON TRUE
        WHERE w.trainer_id = $1 AND w.student_id = $2
-       ORDER BY w.created_at DESC\`,
+       ORDER BY w.created_at DESC`,
       [ATLAS_DEMO_TRAINER_ID, ATLAS_DEMO_STUDENT_ID]
     ),
   ]);
@@ -1331,7 +1331,7 @@ async function atlasDemoState() {
 }
 
 function atlasDemoStyles() {
-  return \`
+  return `
     *{box-sizing:border-box}html,body{margin:0;background:#F4F6F8;color:#0B1B3A;font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
     a{text-decoration:none;color:inherit}button,input{font:inherit}
     .top{position:sticky;top:0;z-index:10;height:78px;background:#0B1B3A;color:white;display:flex;align-items:center;justify-content:space-between;padding:0 22px}
@@ -1349,11 +1349,11 @@ function atlasDemoStyles() {
     .exercise{padding:14px 0;border-top:1px solid #E9ECF2}.exercise strong{display:block}.exercise small{color:#69737A}.actions{display:flex;gap:9px;flex-wrap:wrap;margin-top:16px}
     .role-page{min-height:100vh;background:#0B1B3A;color:#fff;display:grid;place-items:center;padding:26px}.role-box{width:min(760px,100%)}.role-box .pill{display:inline-block;background:#B8E400;color:#0B1B3A;padding:7px 12px;border-radius:999px;font-size:11px;font-weight:1000}.role-box h1{font-size:clamp(46px,8vw,78px);line-height:.98;margin:22px 0}.role-box h1 em{font-style:normal;color:#B8E400}.role-box>p{color:#B7C0CA;line-height:1.6}.roles{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:28px}.role-card{display:block;background:#17283C;border:1px solid #31445C;border-radius:18px;padding:20px}.role-card strong{display:block;font-size:22px;margin-bottom:5px}.role-card span{color:#AEB8C4;font-size:13px}
     @media(max-width:680px){.top{height:70px;padding:0 14px}.brand{font-size:20px}.brand-mark{width:36px;height:36px}.switch a{padding:8px;font-size:10px}.wrap{padding:22px 14px 70px}.hero{flex-direction:column;align-items:flex-start}.hero h1{font-size:32px}.steps{grid-template-columns:1fr 1fr}.panel{padding:18px}.roles{grid-template-columns:1fr}.days{gap:5px}.day{height:46px}.workout{align-items:flex-start;flex-direction:column}.btn{width:100%}}
-  \`;
+  `;
 }
 
 function atlasDemoShell(content, title = 'Atlas — Demonstração') {
-  return \`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#0B1B3A"><meta name="robots" content="noindex"><title>\${atlasHtmlEscape(title)}</title><style>\${atlasDemoStyles()}</style></head><body>\${content}</body></html>\`;
+  return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#0B1B3A"><meta name="robots" content="noindex"><title>${atlasHtmlEscape(title)}</title><style>${atlasDemoStyles()}</style></head><body>${content}</body></html>`;
 }
 
 async function atlasDemoDashboard(role, message = '', error = '') {
@@ -1370,91 +1370,91 @@ async function atlasDemoDashboard(role, message = '', error = '') {
     ['Prescrição', workoutDone],
     ['Execução', executionDone],
   ].map(([label, done], index) =>
-    \`<div class="step \${done ? 'done' : ''}">\${done ? '✓' : index + 1} · \${label}</div>\`
+    `<div class="step ${done ? 'done' : ''}">${done ? '✓' : index + 1} · ${label}</div>`
   ).join('');
 
   const daysDisplay = ATLAS_DEMO_DAY_SHORT.map((label, index) =>
-    \`<span class="day \${state.availability.includes(index) ? 'active' : ''}">\${label}</span>\`
+    `<span class="day ${state.availability.includes(index) ? 'active' : ''}">${label}</span>`
   ).join('');
 
   const workoutRows = state.workouts.map((workout) => {
     const status = workout.completedAt ? 'Concluído' : workout.sessionId ? 'Em execução' : 'Prescrito';
-    return \`<div class="workout"><div><strong>\${atlasHtmlEscape(workout.name)}</strong><small>\${atlasHtmlEscape(workout.model)} · \${workout.scheduledDays.map((day) => ATLAS_DEMO_DAY_NAMES[day]).join(' · ')}</small></div><span class="badge">\${status}</span></div>\`;
+    return `<div class="workout"><div><strong>${atlasHtmlEscape(workout.name)}</strong><small>${atlasHtmlEscape(workout.model)} · ${workout.scheduledDays.map((day) => ATLAS_DEMO_DAY_NAMES[day]).join(' · ')}</small></div><span class="badge">${status}</span></div>`;
   }).join('');
 
   let body = '';
   if (isTrainer) {
     const inviteBody = state.linked
-      ? \`<div class="state"><div><strong>Aluno Atlas</strong><small>aluno@atlas.test</small></div><span class="badge">Vinculado</span></div>\`
+      ? `<div class="state"><div><strong>Aluno Atlas</strong><small>aluno@atlas.test</small></div><span class="badge">Vinculado</span></div>`
       : state.invitation
-        ? \`<div class="state"><div><strong>Aluno Atlas</strong><small>Convite enviado</small></div><span class="badge">Aguardando aceite</span></div>\`
-        : \`<form method="post" action="/atlas-demo/invite"><button class="btn" type="submit">Enviar convite para Aluno Atlas</button></form>\`;
+        ? `<div class="state"><div><strong>Aluno Atlas</strong><small>Convite enviado</small></div><span class="badge">Aguardando aceite</span></div>`
+        : `<form method="post" action="/atlas-demo/invite"><button class="btn" type="submit">Enviar convite para Aluno Atlas</button></form>`;
 
     const availabilityBody = availabilityDone
-      ? \`<div class="days">\${daysDisplay}</div><strong>\${state.availability.length} dias: \${state.availability.map((day) => ATLAS_DEMO_DAY_NAMES[day]).join(' · ')}</strong>\`
-      : \`<p>\${state.linked ? 'Aguardando o aluno informar os dias disponíveis.' : 'O aluno precisa aceitar o convite primeiro.'}</p>\`;
+      ? `<div class="days">${daysDisplay}</div><strong>${state.availability.length} dias: ${state.availability.map((day) => ATLAS_DEMO_DAY_NAMES[day]).join(' · ')}</strong>`
+      : `<p>${state.linked ? 'Aguardando o aluno informar os dias disponíveis.' : 'O aluno precisa aceitar o convite primeiro.'}</p>`;
 
     const prescribeBody = availabilityDone
       ? (workoutDone
-          ? \`<p>O treino já foi prescrito. Acompanhe o status abaixo.</p>\`
-          : \`<form method="post" action="/atlas-demo/prescribe"><button class="btn" type="submit">Prescrever Treino A — Peito & Costas</button></form>\`)
-      : \`<p>A prescrição será liberada depois que o aluno salvar a disponibilidade.</p>\`;
+          ? `<p>O treino já foi prescrito. Acompanhe o status abaixo.</p>`
+          : `<form method="post" action="/atlas-demo/prescribe"><button class="btn" type="submit">Prescrever Treino A — Peito & Costas</button></form>`)
+      : `<p>A prescrição será liberada depois que o aluno salvar a disponibilidade.</p>`;
 
-    body = \`
-      <section class="panel"><div class="panel-head"><div><h2>1. Convidar aluno</h2><p>O vínculo só existe depois do aceite.</p></div>\${state.linked ? '<span class="badge">Vinculado</span>' : ''}</div>\${inviteBody}</section>
-      <section class="panel"><div class="panel-head"><div><h2>2. Disponibilidade do aluno</h2><p>Somente o aluno escolhe quando consegue treinar.</p></div>\${availabilityDone ? '<span class="badge">Informada</span>' : ''}</div>\${availabilityBody}</section>
-      <section class="panel"><div class="panel-head"><div><h2>3. Prescrever treino</h2><p>O treino respeita a disponibilidade informada.</p></div>\${workoutDone ? '<span class="badge">Prescrito</span>' : ''}</div>\${prescribeBody}\${workoutRows}</section>
-    \`;
+    body = `
+      <section class="panel"><div class="panel-head"><div><h2>1. Convidar aluno</h2><p>O vínculo só existe depois do aceite.</p></div>${state.linked ? '<span class="badge">Vinculado</span>' : ''}</div>${inviteBody}</section>
+      <section class="panel"><div class="panel-head"><div><h2>2. Disponibilidade do aluno</h2><p>Somente o aluno escolhe quando consegue treinar.</p></div>${availabilityDone ? '<span class="badge">Informada</span>' : ''}</div>${availabilityBody}</section>
+      <section class="panel"><div class="panel-head"><div><h2>3. Prescrever treino</h2><p>O treino respeita a disponibilidade informada.</p></div>${workoutDone ? '<span class="badge">Prescrito</span>' : ''}</div>${prescribeBody}${workoutRows}</section>
+    `;
   } else {
     const pendingInvite = state.invitation && !state.invitation.accepted_at && !state.linked;
     const inviteBody = state.linked
       ? '<span class="badge">Professor vinculado</span>'
       : pendingInvite
-        ? \`<form method="post" action="/atlas-demo/accept"><button class="btn" type="submit">Aceitar convite do Professor Atlas</button></form>\`
+        ? `<form method="post" action="/atlas-demo/accept"><button class="btn" type="submit">Aceitar convite do Professor Atlas</button></form>`
         : '<p>Entre como Professor Atlas e envie o convite primeiro.</p>';
 
     const availabilityForm = state.linked
-      ? \`<form method="post" action="/atlas-demo/availability"><div class="days">\${ATLAS_DEMO_DAY_SHORT.map((label, index) => \`<label class="day-check"><input type="checkbox" name="days" value="\${index}" \${state.availability.includes(index) ? 'checked' : ''}><span class="day">\${label}</span></label>\`).join('')}</div><button class="btn" type="submit">Salvar disponibilidade</button></form>\`
+      ? `<form method="post" action="/atlas-demo/availability"><div class="days">${ATLAS_DEMO_DAY_SHORT.map((label, index) => `<label class="day-check"><input type="checkbox" name="days" value="${index}" ${state.availability.includes(index) ? 'checked' : ''}><span class="day">${label}</span></label>`).join('')}</div><button class="btn" type="submit">Salvar disponibilidade</button></form>`
       : '<p>Aceite o convite antes de informar sua rotina.</p>';
 
     let studentWorkoutBody = '<p>Aguardando o professor prescrever um treino.</p>';
     if (workoutDone) {
       const latest = state.workouts[0];
       if (latest.completedAt) {
-        studentWorkoutBody = \`\${workoutRows}<div class="actions"><span class="badge">Treino concluído</span></div>\`;
+        studentWorkoutBody = `${workoutRows}<div class="actions"><span class="badge">Treino concluído</span></div>`;
       } else if (latest.sessionId) {
-        studentWorkoutBody = \`\${workoutRows}<form method="post" action="/atlas-demo/complete"><button class="btn" type="submit">Registrar séries e concluir treino</button></form>\`;
+        studentWorkoutBody = `${workoutRows}<form method="post" action="/atlas-demo/complete"><button class="btn" type="submit">Registrar séries e concluir treino</button></form>`;
       } else {
-        studentWorkoutBody = \`\${workoutRows}<form method="post" action="/atlas-demo/start"><button class="btn" type="submit">Iniciar treino</button></form>\`;
+        studentWorkoutBody = `${workoutRows}<form method="post" action="/atlas-demo/start"><button class="btn" type="submit">Iniciar treino</button></form>`;
       }
     }
 
-    body = \`
-      <section class="panel"><div class="panel-head"><div><h2>1. Convite do professor</h2><p>Você decide se deseja criar o vínculo.</p></div>\${state.linked ? '<span class="badge">Aceito</span>' : ''}</div>\${inviteBody}</section>
-      <section class="panel"><div class="panel-head"><div><h2>2. Minha disponibilidade</h2><p>Escolha os dias em que você consegue treinar.</p></div>\${availabilityDone ? \`<span class="badge">\${state.availability.length} dias</span>\` : ''}</div>\${availabilityForm}</section>
-      <section class="panel"><div class="panel-head"><div><h2>3. Meus treinos</h2><p>Treinos prescritos pelo Professor Atlas.</p></div>\${workoutDone ? '<span class="badge">Recebido</span>' : ''}</div>\${studentWorkoutBody}</section>
-    \`;
+    body = `
+      <section class="panel"><div class="panel-head"><div><h2>1. Convite do professor</h2><p>Você decide se deseja criar o vínculo.</p></div>${state.linked ? '<span class="badge">Aceito</span>' : ''}</div>${inviteBody}</section>
+      <section class="panel"><div class="panel-head"><div><h2>2. Minha disponibilidade</h2><p>Escolha os dias em que você consegue treinar.</p></div>${availabilityDone ? `<span class="badge">${state.availability.length} dias</span>` : ''}</div>${availabilityForm}</section>
+      <section class="panel"><div class="panel-head"><div><h2>3. Meus treinos</h2><p>Treinos prescritos pelo Professor Atlas.</p></div>${workoutDone ? '<span class="badge">Recebido</span>' : ''}</div>${studentWorkoutBody}</section>
+    `;
   }
 
-  const notice = \`\${message ? \`<div class="notice ok">\${atlasHtmlEscape(message)}</div>\` : ''}\${error ? \`<div class="notice err">\${atlasHtmlEscape(error)}</div>\` : ''}\`;
+  const notice = `${message ? `<div class="notice ok">${atlasHtmlEscape(message)}</div>` : ''}${error ? `<div class="notice err">${atlasHtmlEscape(error)}</div>` : ''}`;
 
-  return atlasDemoShell(\`
-    <header class="top"><a class="brand" href="/atlas-demo"><span class="brand-mark">⌁</span>Atlas</a><nav class="switch"><a class="\${isTrainer ? 'active' : ''}" href="/atlas-demo?role=trainer">Professor</a><a class="\${!isTrainer ? 'active' : ''}" href="/atlas-demo?role=student">Aluno</a></nav></header>
+  return atlasDemoShell(`
+    <header class="top"><a class="brand" href="/atlas-demo"><span class="brand-mark">⌁</span>Atlas</a><nav class="switch"><a class="${isTrainer ? 'active' : ''}" href="/atlas-demo?role=trainer">Professor</a><a class="${!isTrainer ? 'active' : ''}" href="/atlas-demo?role=student">Aluno</a></nav></header>
     <main class="wrap">
-      <section class="hero"><div><span class="eyebrow">\${isTrainer ? 'PAINEL DO PROFESSOR' : 'PAINEL DO ALUNO'}</span><h1>\${isTrainer ? 'Fluxo de acompanhamento' : 'Seu fluxo de treino'}</h1><p>\${isTrainer ? 'Convide, acompanhe a disponibilidade e prescreva um treino.' : 'Aceite o professor, informe seus dias e execute o treino recebido.'}</p></div>\${isTrainer ? '<form method="post" action="/atlas-demo/reset"><button class="btn ghost" type="submit">Reiniciar demo</button></form>' : ''}</section>
-      <div class="steps">\${steps}</div>
-      \${notice}
-      \${body}
+      <section class="hero"><div><span class="eyebrow">${isTrainer ? 'PAINEL DO PROFESSOR' : 'PAINEL DO ALUNO'}</span><h1>${isTrainer ? 'Fluxo de acompanhamento' : 'Seu fluxo de treino'}</h1><p>${isTrainer ? 'Convide, acompanhe a disponibilidade e prescreva um treino.' : 'Aceite o professor, informe seus dias e execute o treino recebido.'}</p></div>${isTrainer ? '<form method="post" action="/atlas-demo/reset"><button class="btn ghost" type="submit">Reiniciar demo</button></form>' : ''}</section>
+      <div class="steps">${steps}</div>
+      ${notice}
+      ${body}
     </main>
-  \`, 'Atlas — Fluxo integrado');
+  `, 'Atlas — Fluxo integrado');
 }
 
 app.get('/atlas-demo', asyncRoute(async (req, res) => {
   const role = req.query.role === 'trainer' ? 'trainer' : req.query.role === 'student' ? 'student' : null;
   if (!role) {
-    return res.type('html').send(atlasDemoShell(\`
+    return res.type('html').send(atlasDemoShell(`
       <main class="role-page"><section class="role-box"><span class="pill">ATLAS · BACKEND CONECTADO</span><h1>Professor e aluno.<br><em>Do convite ao treino concluído.</em></h1><p>Esta versão é renderizada diretamente pelo backend. Não depende de JavaScript, CORS ou cache do navegador.</p><div class="roles"><a class="role-card" href="/atlas-demo?role=trainer"><strong>Professor Atlas</strong><span>Convite e prescrição</span></a><a class="role-card" href="/atlas-demo?role=student"><strong>Aluno Atlas</strong><span>Disponibilidade e execução</span></a></div></section></main>
-    \`));
+    `));
   }
 
   res.type('html').send(await atlasDemoDashboard(
@@ -1492,18 +1492,18 @@ app.post('/atlas-demo/invite', asyncRoute(async (_req, res) => {
 app.post('/atlas-demo/accept', asyncRoute(async (_req, res) => {
   try {
     const { rows } = await pool.query(
-      \`SELECT id FROM atlas_invitations
+      `SELECT id FROM atlas_invitations
        WHERE trainer_id = $1 AND student_email = $2 AND accepted_at IS NULL
-       ORDER BY created_at DESC LIMIT 1\`,
+       ORDER BY created_at DESC LIMIT 1`,
       [ATLAS_DEMO_TRAINER_ID, ATLAS_DEMO_STUDENT_EMAIL]
     );
     if (!rows[0]) return atlasDemoRedirect(res, 'student', '', 'Nenhum convite pendente foi encontrado.');
 
     await pool.query('UPDATE atlas_invitations SET accepted_at = NOW() WHERE id = $1', [rows[0].id]);
     await pool.query(
-      \`INSERT INTO atlas_trainer_students (id, trainer_id, student_id)
+      `INSERT INTO atlas_trainer_students (id, trainer_id, student_id)
        VALUES ($1, $2, $3)
-       ON CONFLICT (trainer_id, student_id) DO NOTHING\`,
+       ON CONFLICT (trainer_id, student_id) DO NOTHING`,
       [crypto.randomUUID(), ATLAS_DEMO_TRAINER_ID, ATLAS_DEMO_STUDENT_ID]
     );
     atlasDemoRedirect(res, 'student', 'Convite aceito. Agora informe sua disponibilidade.');
@@ -1577,16 +1577,16 @@ app.post('/atlas-demo/prescribe', asyncRoute(async (_req, res) => {
     try {
       await client.query('BEGIN');
       await client.query(
-        \`INSERT INTO atlas_workouts (id, trainer_id, student_id, name, model, notes, scheduled_days)
-         VALUES ($1, $2, $3, $4, $5, $6, $7::smallint[])\`,
+        `INSERT INTO atlas_workouts (id, trainer_id, student_id, name, model, notes, scheduled_days)
+         VALUES ($1, $2, $3, $4, $5, $6, $7::smallint[])`,
         [workoutId, ATLAS_DEMO_TRAINER_ID, ATLAS_DEMO_STUDENT_ID, 'Treino A — Peito & Costas', 'AB', 'Amplitude controlada e progressão de carga.', scheduledDays]
       );
       for (let index = 0; index < exercises.length; index += 1) {
         const [name, sets, reps, weight, rest] = exercises[index];
         await client.query(
-          \`INSERT INTO atlas_workout_exercises
+          `INSERT INTO atlas_workout_exercises
             (id, workout_id, name, sets, reps, suggested_weight, rest_seconds, position)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)\`,
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
           [crypto.randomUUID(), workoutId, name, sets, reps, weight, rest, index]
         );
       }
@@ -1608,18 +1608,18 @@ app.post('/atlas-demo/prescribe', asyncRoute(async (_req, res) => {
 app.post('/atlas-demo/start', asyncRoute(async (_req, res) => {
   try {
     const { rows } = await pool.query(
-      \`SELECT id FROM atlas_workouts
+      `SELECT id FROM atlas_workouts
        WHERE trainer_id = $1 AND student_id = $2
-       ORDER BY created_at DESC LIMIT 1\`,
+       ORDER BY created_at DESC LIMIT 1`,
       [ATLAS_DEMO_TRAINER_ID, ATLAS_DEMO_STUDENT_ID]
     );
     if (!rows[0]) return atlasDemoRedirect(res, 'student', '', 'Nenhum treino foi prescrito.');
 
     const workoutId = rows[0].id;
     const open = await pool.query(
-      \`SELECT id FROM atlas_workout_sessions
+      `SELECT id FROM atlas_workout_sessions
        WHERE workout_id = $1 AND student_id = $2 AND completed_at IS NULL
-       ORDER BY started_at DESC LIMIT 1\`,
+       ORDER BY started_at DESC LIMIT 1`,
       [workoutId, ATLAS_DEMO_STUDENT_ID]
     );
     if (!open.rowCount) {
@@ -1638,20 +1638,20 @@ app.post('/atlas-demo/start', asyncRoute(async (_req, res) => {
 app.post('/atlas-demo/complete', asyncRoute(async (_req, res) => {
   try {
     const { rows: sessionRows } = await pool.query(
-      \`SELECT ws.id, ws.workout_id
+      `SELECT ws.id, ws.workout_id
        FROM atlas_workout_sessions ws
        WHERE ws.student_id = $1 AND ws.completed_at IS NULL
-       ORDER BY ws.started_at DESC LIMIT 1\`,
+       ORDER BY ws.started_at DESC LIMIT 1`,
       [ATLAS_DEMO_STUDENT_ID]
     );
     const session = sessionRows[0];
     if (!session) return atlasDemoRedirect(res, 'student', '', 'Nenhum treino em execução.');
 
     const { rows: exercises } = await pool.query(
-      \`SELECT id, sets, reps, suggested_weight
+      `SELECT id, sets, reps, suggested_weight
        FROM atlas_workout_exercises
        WHERE workout_id = $1
-       ORDER BY position\`,
+       ORDER BY position`,
       [session.workout_id]
     );
 
@@ -1661,19 +1661,19 @@ app.post('/atlas-demo/complete', asyncRoute(async (_req, res) => {
       for (const exercise of exercises) {
         for (let setNumber = 1; setNumber <= exercise.sets; setNumber += 1) {
           await client.query(
-            \`INSERT INTO atlas_set_logs
+            `INSERT INTO atlas_set_logs
               (id, session_id, exercise_id, set_number, reps, weight, completed, notes)
              VALUES ($1, $2, $3, $4, $5, $6, TRUE, '')
              ON CONFLICT (session_id, exercise_id, set_number)
-             DO UPDATE SET reps = EXCLUDED.reps, weight = EXCLUDED.weight, completed = TRUE\`,
+             DO UPDATE SET reps = EXCLUDED.reps, weight = EXCLUDED.weight, completed = TRUE`,
             [crypto.randomUUID(), session.id, exercise.id, setNumber, exercise.reps, exercise.suggested_weight]
           );
         }
       }
       await client.query(
-        \`UPDATE atlas_workout_sessions
+        `UPDATE atlas_workout_sessions
          SET completed_at = NOW(), notes = 'Treino concluído pelo fluxo server-rendered.'
-         WHERE id = $1\`,
+         WHERE id = $1`,
         [session.id]
       );
       await client.query('COMMIT');
@@ -1693,7 +1693,7 @@ app.post('/atlas-demo/complete', asyncRoute(async (_req, res) => {
 
 app.post('/atlas-demo/reset', asyncRoute(async (_req, res) => {
   try {
-    await pool.query(\`
+    await pool.query(`
       DELETE FROM atlas_set_logs;
       DELETE FROM atlas_workout_sessions;
       DELETE FROM atlas_workout_exercises;
@@ -1701,7 +1701,7 @@ app.post('/atlas-demo/reset', asyncRoute(async (_req, res) => {
       DELETE FROM atlas_availability;
       DELETE FROM atlas_trainer_students;
       DELETE FROM atlas_invitations;
-    \`);
+    `);
     atlasDemoRedirect(res, 'trainer', 'Demonstração reiniciada.');
   } catch (error) {
     console.error('Atlas demo reset:', error);
