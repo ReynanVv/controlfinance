@@ -656,6 +656,20 @@ function atlasTokenHash(token) {
   return crypto.createHash('sha256').update(String(token)).digest('hex');
 }
 
+function atlasInviteHash(token) {
+  return crypto.createHash('sha256').update('atlas-invite:' + String(token)).digest('hex');
+}
+
+async function atlasCreateSession(userId) {
+  const token = crypto.randomBytes(32).toString('hex');
+  await pool.query(
+    `INSERT INTO atlas_sessions (id, user_id, token_hash, expires_at)
+     VALUES ($1, $2, $3, NOW() + INTERVAL '7 days')`,
+    [crypto.randomUUID(), userId, atlasTokenHash(token)]
+  );
+  return token;
+}
+
 async function atlasRequireAuth(req, res, next) {
   try {
     const header = String(req.headers.authorization || '');
@@ -800,6 +814,14 @@ async function ensureAtlasSchema() {
     CREATE INDEX IF NOT EXISTS idx_atlas_availability_student ON atlas_availability(student_id);
     CREATE INDEX IF NOT EXISTS idx_atlas_workouts_student ON atlas_workouts(student_id);
     CREATE INDEX IF NOT EXISTS idx_atlas_sessions_student ON atlas_workout_sessions(student_id);
+  `);
+
+  await pool.query(`
+    ALTER TABLE atlas_invitations ADD COLUMN IF NOT EXISTS token_hash TEXT;
+    ALTER TABLE atlas_invitations ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_atlas_invites_token_hash
+      ON atlas_invitations(token_hash)
+      WHERE token_hash IS NOT NULL;
   `);
 
   const trainerPassword = await hashPassword(ATLAS_DEMO_PASSWORD);
