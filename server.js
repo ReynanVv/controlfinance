@@ -661,12 +661,12 @@ function atlasInviteHash(token) {
   return crypto.createHash('sha256').update('atlas-invite:' + String(token)).digest('hex');
 }
 
-async function atlasCreateSession(userId) {
+async function atlasCreateSession(userId, activeRole = null) {
   const token = crypto.randomBytes(32).toString('hex');
   await pool.query(
-    `INSERT INTO atlas_sessions (id, user_id, token_hash, expires_at)
-     VALUES ($1, $2, $3, NOW() + INTERVAL '7 days')`,
-    [crypto.randomUUID(), userId, atlasTokenHash(token)]
+    `INSERT INTO atlas_sessions (id, user_id, token_hash, active_role, expires_at)
+     VALUES ($1, $2, $3, $4, NOW() + INTERVAL '7 days')`,
+    [crypto.randomUUID(), userId, atlasTokenHash(token), activeRole]
   );
   return token;
 }
@@ -679,7 +679,7 @@ async function atlasRequireAuth(req, res, next) {
 
     const tokenHash = atlasTokenHash(token);
     const { rows } = await pool.query(`
-      SELECT u.id, u.name, u.email, u.role
+      SELECT u.id, u.name, u.email, COALESCE(s.active_role, u.role) AS role
       FROM atlas_sessions s
       JOIN atlas_users u ON u.id = s.user_id
       WHERE s.token_hash = $1 AND s.expires_at > NOW()
@@ -740,6 +740,7 @@ async function ensureAtlasSchema() {
       id UUID PRIMARY KEY,
       user_id UUID NOT NULL REFERENCES atlas_users(id) ON DELETE CASCADE,
       token_hash TEXT NOT NULL UNIQUE,
+      active_role TEXT CHECK (active_role IN ('trainer', 'student')),
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       expires_at TIMESTAMPTZ NOT NULL
     );
@@ -818,6 +819,7 @@ async function ensureAtlasSchema() {
   `);
 
   await pool.query(`
+    ALTER TABLE atlas_sessions ADD COLUMN IF NOT EXISTS active_role TEXT;
     ALTER TABLE atlas_invitations ALTER COLUMN student_email DROP NOT NULL;
     ALTER TABLE atlas_invitations ADD COLUMN IF NOT EXISTS token_hash TEXT;
     ALTER TABLE atlas_invitations ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
@@ -939,10 +941,10 @@ app.post('/atlas-api/auth/register', authLimit, asyncRoute(async (req, res) => {
     client.release();
   }
 
-  const token = await atlasCreateSession(userId);
+  const token = await atlasCreateSession(userId, role);
   res.status(201).json({
     token,
-    user: { id: userId, name, email, role },
+    user: { id: userId, name, email, role, profiles: [role] },
     invitationAccepted: Boolean(invitation),
   });
 }));
@@ -963,9 +965,9 @@ app.post('/atlas-api/auth/login', authLimit, asyncRoute(async (req, res) => {
   const token = crypto.randomBytes(32).toString('hex');
   const tokenHash = atlasTokenHash(token);
   await pool.query(
-    `INSERT INTO atlas_sessions (id, user_id, token_hash, expires_at)
-     VALUES ($1, $2, $3, NOW() + INTERVAL '7 days')`,
-    [crypto.randomUUID(), user.id, tokenHash]
+    `INSERT INTO atlas_sessions (id, user_id, token_hash, active_role, expires_at)
+     VALUES ($1, $2, $3, $4, NOW() + INTERVAL '7 days')`,
+    [crypto.randomUUID(), user.id, tokenHash, user.role]
   );
 
   res.json({
@@ -989,8 +991,8 @@ app.post('/atlas-api/auth/demo-login', asyncRoute(async (req, res) => {
   const user = rows[0];
   if (!user) return res.status(404).json({ error: 'Usuário de demonstração não encontrado.' });
 
-  const token = await atlasCreateSession(user.id);
-  res.json({ token, user });
+  const token = await atlasCreateSession(user.id, role);
+  res.json({ token, user: { ...user, profiles: [role] } });
 }));
 
 app.post('/atlas-api/auth/logout', atlasRequireAuth, asyncRoute(async (req, res) => {
@@ -1021,7 +1023,7 @@ app.get('/atlas-api/invitations/resolve/:token', asyncRoute(async (req, res) => 
   res.json(invitation);
 }));
 
-app.post('/atlas-api/invitations/accept-token', atlasRequireAuth, atlasRole('student'), asyncRoute(async (req, res) => {
+app.post('/atlas-api/invitations/accept-token', atlasRequireAuth, asyncRoute(async (req, res) => {
   const rawToken = String(req.body?.token || '').trim();
   if (!rawToken) return res.status(400).json({ error: 'Token de convite ausente.' });
 
@@ -1038,6 +1040,17 @@ app.post('/atlas-api/invitations/accept-token', atlasRequireAuth, atlasRole('stu
   if (invitation.expires_at && new Date(invitation.expires_at) < new Date()) {
     return res.status(410).json({ error: 'Este convite expirou. Solicite um novo link ao treinador.' });
   }
+
+  await pool.query(
+    `INSERT INTO atlas_user_profiles (id, user_id, profile)
+     VALUES ($1, $2, 'student')
+     ON CONFLICT (user_id, profile) DO NOTHING`,
+    [crypto.randomUUID(), req.atlasUser.id]
+  );
+  await pool.query(
+    'UPDATE atlas_sessions SET active_role = $2 WHERE token_hash = $1',
+    [req.atlasTokenHash, 'student']
+  );
 
   const alreadyLinked = await pool.query(
     'SELECT 1 FROM atlas_trainer_students WHERE trainer_id = $1 AND student_id = $2',
