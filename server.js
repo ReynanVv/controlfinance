@@ -1339,8 +1339,9 @@ app.get('/atlas-api/sessions/:id', atlasRequireAuth, atlasRole('student'), async
   if (!sessions[0]) return res.status(404).json({ error: 'Execução não encontrada.' });
 
   const { rows: exercises } = await pool.query(`
-    SELECT e.id, e.name, e.sets, e.reps, e.suggested_weight::float8 AS "suggestedWeight",
-           e.rest_seconds AS "restSeconds", e.position
+    SELECT e.id, e.exercise_id AS "exerciseId", e.name, e.sets, e.reps,
+           e.suggested_weight::float8 AS "suggestedWeight",
+           e.rest_seconds AS "restSeconds", e.notes, e.video_url AS "videoUrl", e.position
     FROM atlas_workout_exercises e
     WHERE e.workout_id = $1
     ORDER BY e.position
