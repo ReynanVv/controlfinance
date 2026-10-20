@@ -34,7 +34,7 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(express.json({ limit: '128kb' }));
+app.use(express.json({ limit: '12mb' }));
 app.use(express.urlencoded({ extended: false, limit: '32kb' }));
 app.use(cookieParser(SESSION_SECRET));
 app.use(express.static('public'));
@@ -823,6 +823,112 @@ async function ensureAtlasSchema() {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_atlas_invites_token_hash
       ON atlas_invitations(token_hash)
       WHERE token_hash IS NOT NULL;
+  `);
+
+  await pool.query(`
+    ALTER TABLE atlas_users ADD COLUMN IF NOT EXISTS avatar_url TEXT;
+    ALTER TABLE atlas_sessions ADD COLUMN IF NOT EXISTS active_role TEXT;
+
+    ALTER TABLE atlas_workouts ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '';
+    ALTER TABLE atlas_workouts ADD COLUMN IF NOT EXISTS intensity TEXT NOT NULL DEFAULT 'Moderada';
+    ALTER TABLE atlas_workouts ADD COLUMN IF NOT EXISTS estimated_minutes INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE atlas_workouts ADD COLUMN IF NOT EXISTS template_id UUID;
+
+    ALTER TABLE atlas_workout_exercises ADD COLUMN IF NOT EXISTS exercise_id UUID;
+    ALTER TABLE atlas_workout_exercises ADD COLUMN IF NOT EXISTS notes TEXT NOT NULL DEFAULT '';
+    ALTER TABLE atlas_workout_exercises ADD COLUMN IF NOT EXISTS video_url TEXT;
+
+    CREATE TABLE IF NOT EXISTS atlas_user_profiles (
+      id UUID PRIMARY KEY,
+      user_id UUID NOT NULL REFERENCES atlas_users(id) ON DELETE CASCADE,
+      profile TEXT NOT NULL CHECK (profile IN ('trainer', 'student')),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (user_id, profile)
+    );
+
+    CREATE TABLE IF NOT EXISTS atlas_exercises (
+      id UUID PRIMARY KEY,
+      owner_id UUID REFERENCES atlas_users(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      category TEXT NOT NULL DEFAULT '',
+      muscle_groups TEXT[] NOT NULL DEFAULT '{}',
+      intensity TEXT NOT NULL DEFAULT 'Moderada',
+      description TEXT NOT NULL DEFAULT '',
+      video_url TEXT,
+      video_data BYTEA,
+      video_mime TEXT,
+      video_filename TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS atlas_workout_templates (
+      id UUID PRIMARY KEY,
+      trainer_id UUID NOT NULL REFERENCES atlas_users(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      intensity TEXT NOT NULL DEFAULT 'Moderada',
+      notes TEXT NOT NULL DEFAULT '',
+      estimated_minutes INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS atlas_template_exercises (
+      id UUID PRIMARY KEY,
+      template_id UUID NOT NULL REFERENCES atlas_workout_templates(id) ON DELETE CASCADE,
+      exercise_id UUID REFERENCES atlas_exercises(id) ON DELETE SET NULL,
+      name TEXT NOT NULL,
+      sets SMALLINT NOT NULL CHECK (sets > 0),
+      reps SMALLINT NOT NULL CHECK (reps > 0),
+      suggested_weight NUMERIC(8,2) NOT NULL DEFAULT 0 CHECK (suggested_weight >= 0),
+      rest_seconds INTEGER NOT NULL DEFAULT 0 CHECK (rest_seconds >= 0),
+      video_url TEXT,
+      notes TEXT NOT NULL DEFAULT '',
+      position INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS atlas_messages (
+      id UUID PRIMARY KEY,
+      trainer_id UUID NOT NULL REFERENCES atlas_users(id) ON DELETE CASCADE,
+      student_id UUID NOT NULL REFERENCES atlas_users(id) ON DELETE CASCADE,
+      sender_id UUID NOT NULL REFERENCES atlas_users(id) ON DELETE CASCADE,
+      body TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      read_at TIMESTAMPTZ
+    );
+
+    CREATE TABLE IF NOT EXISTS atlas_notifications (
+      id UUID PRIMARY KEY,
+      user_id UUID NOT NULL REFERENCES atlas_users(id) ON DELETE CASCADE,
+      type TEXT NOT NULL,
+      title TEXT NOT NULL,
+      body TEXT NOT NULL DEFAULT '',
+      reference_id UUID,
+      occurrence_key TEXT NOT NULL DEFAULT '',
+      read_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_atlas_notification_unique
+      ON atlas_notifications(user_id, type, reference_id, occurrence_key);
+    CREATE INDEX IF NOT EXISTS idx_atlas_profiles_user ON atlas_user_profiles(user_id);
+    CREATE INDEX IF NOT EXISTS idx_atlas_exercises_owner_name ON atlas_exercises(owner_id, name);
+    CREATE INDEX IF NOT EXISTS idx_atlas_templates_trainer ON atlas_workout_templates(trainer_id);
+    CREATE INDEX IF NOT EXISTS idx_atlas_messages_pair_time ON atlas_messages(trainer_id, student_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_atlas_notifications_user_time ON atlas_notifications(user_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_atlas_set_logs_session ON atlas_set_logs(session_id);
+  `);
+
+  await pool.query(`
+    INSERT INTO atlas_user_profiles (id, user_id, profile)
+    SELECT gen_random_uuid(), id, role FROM atlas_users
+    ON CONFLICT (user_id, profile) DO NOTHING;
+
+    UPDATE atlas_sessions s
+    SET active_role = u.role
+    FROM atlas_users u
+    WHERE s.user_id = u.id AND s.active_role IS NULL;
   `);
 
   const trainerPassword = await hashPassword(ATLAS_DEMO_PASSWORD);
