@@ -1892,6 +1892,13 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`ControlFinance rodando na porta ${PORT}`);
 });
 
-Promise.all([ensureSchema(), ensureAtlasSchema(), ensureAtlasExtraSchema(pool)])
-  .then(() => console.log('Schemas ControlFinance/Atlas verificados.'))
-  .catch((error) => console.error('Falha ao verificar schemas:', error));
+(async () => {
+  try {
+    await ensureSchema();
+    await ensureAtlasSchema();
+    await ensureAtlasExtraSchema(pool);
+    console.log('Schemas ControlFinance/Atlas verificados.');
+  } catch (error) {
+    console.error('Falha ao verificar schemas:', error);
+  }
+})();
