@@ -1045,6 +1045,10 @@ app.post('/atlas-api/auth/register', authLimit, asyncRoute(async (req, res) => {
       'INSERT INTO atlas_users (id, name, email, role, password_hash) VALUES ($1, $2, $3, $4, $5)',
       [userId, name, email, role, passwordHash]
     );
+    await client.query(
+      'INSERT INTO atlas_user_profiles (id, user_id, profile) VALUES ($1, $2, $3)',
+      [crypto.randomUUID(), userId, role]
+    );
 
     if (invitation) {
       await client.query(
@@ -1067,10 +1071,10 @@ app.post('/atlas-api/auth/register', authLimit, asyncRoute(async (req, res) => {
     client.release();
   }
 
-  const token = await atlasCreateSession(userId);
+  const session = await atlasCreateSession(userId, role);
   res.status(201).json({
-    token,
-    user: { id: userId, name, email, role },
+    token: session.token,
+    user: { id: userId, name, email, role: session.role, profiles: session.profiles, avatarUrl: null },
     invitationAccepted: Boolean(invitation),
   });
 }));
@@ -1088,17 +1092,10 @@ app.post('/atlas-api/auth/login', authLimit, asyncRoute(async (req, res) => {
     return res.status(401).json({ error: 'E-mail ou senha incorretos.' });
   }
 
-  const token = crypto.randomBytes(32).toString('hex');
-  const tokenHash = atlasTokenHash(token);
-  await pool.query(
-    `INSERT INTO atlas_sessions (id, user_id, token_hash, expires_at)
-     VALUES ($1, $2, $3, NOW() + INTERVAL '7 days')`,
-    [crypto.randomUUID(), user.id, tokenHash]
-  );
-
+  const session = await atlasCreateSession(user.id, user.role);
   res.json({
-    token,
-    user: { id: user.id, name: user.name, email: user.email, role: user.role },
+    token: session.token,
+    user: { id: user.id, name: user.name, email: user.email, role: session.role, profiles: session.profiles },
   });
 }));
 
@@ -1117,8 +1114,8 @@ app.post('/atlas-api/auth/demo-login', asyncRoute(async (req, res) => {
   const user = rows[0];
   if (!user) return res.status(404).json({ error: 'Usuário de demonstração não encontrado.' });
 
-  const token = await atlasCreateSession(user.id);
-  res.json({ token, user });
+  const session = await atlasCreateSession(user.id, role);
+  res.json({ token: session.token, user: { ...user, role: session.role, profiles: session.profiles } });
 }));
 
 app.post('/atlas-api/auth/logout', atlasRequireAuth, asyncRoute(async (req, res) => {
