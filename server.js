@@ -967,6 +967,12 @@ async function ensureAtlasSchema() {
     ON CONFLICT (email) DO UPDATE
     SET name = EXCLUDED.name, role = EXCLUDED.role, password_hash = EXCLUDED.password_hash
   `, [trainerPassword, studentPassword]);
+
+  await pool.query(`
+    INSERT INTO atlas_user_profiles (id, user_id, profile)
+    SELECT gen_random_uuid(), id, role FROM atlas_users
+    ON CONFLICT (user_id, profile) DO NOTHING;
+  `);
 }
 
 app.get('/atlas-api/health', (_req, res) => {
@@ -1126,6 +1132,51 @@ app.post('/atlas-api/auth/logout', atlasRequireAuth, asyncRoute(async (req, res)
 app.get('/atlas-api/me', atlasRequireAuth, (req, res) => {
   res.json({ user: req.atlasUser });
 });
+
+app.get('/atlas-api/profiles', atlasRequireAuth, asyncRoute(async (req, res) => {
+  res.json({ active: req.atlasUser.role, profiles: req.atlasUser.profiles || [] });
+}));
+
+app.post('/atlas-api/profiles', atlasRequireAuth, asyncRoute(async (req, res) => {
+  const profile = req.body?.profile === 'trainer' ? 'trainer' : req.body?.profile === 'student' ? 'student' : null;
+  if (!profile) return res.status(400).json({ error: 'Perfil inválido.' });
+
+  await pool.query(
+    `INSERT INTO atlas_user_profiles (id, user_id, profile)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (user_id, profile) DO NOTHING`,
+    [crypto.randomUUID(), req.atlasUser.id, profile]
+  );
+  const profiles = await atlasUserProfiles(req.atlasUser.id);
+  res.status(201).json({ profiles });
+}));
+
+app.put('/atlas-api/profiles/active', atlasRequireAuth, asyncRoute(async (req, res) => {
+  const profile = req.body?.profile === 'trainer' ? 'trainer' : req.body?.profile === 'student' ? 'student' : null;
+  if (!profile) return res.status(400).json({ error: 'Perfil inválido.' });
+  const profiles = await atlasUserProfiles(req.atlasUser.id);
+  if (!profiles.includes(profile)) return res.status(403).json({ error: 'Este perfil não está ativo na sua conta.' });
+
+  await pool.query(
+    'UPDATE atlas_sessions SET active_role = $2 WHERE token_hash = $1',
+    [req.atlasTokenHash, profile]
+  );
+  res.json({
+    user: { ...req.atlasUser, role: profile, profiles },
+  });
+}));
+
+app.patch('/atlas-api/me', atlasRequireAuth, asyncRoute(async (req, res) => {
+  const name = req.body?.name == null ? req.atlasUser.name : text(req.body.name, 'Nome', true, 120);
+  const avatarUrl = req.body?.avatarUrl == null ? req.atlasUser.avatarUrl : text(req.body.avatarUrl, 'Foto de perfil', false, 1200);
+  const { rows } = await pool.query(
+    `UPDATE atlas_users SET name = $2, avatar_url = $3
+     WHERE id = $1
+     RETURNING id, name, email, avatar_url AS "avatarUrl"`,
+    [req.atlasUser.id, name, avatarUrl || null]
+  );
+  res.json({ user: { ...rows[0], role: req.atlasUser.role, profiles: req.atlasUser.profiles } });
+}));
 
 app.get('/atlas-api/invitations/resolve/:token', asyncRoute(async (req, res) => {
   const inviteHash = atlasInviteHash(req.params.token);
