@@ -749,6 +749,16 @@ function atlasWorkoutPayload(row, exercises = []) {
   };
 }
 
+function atlasWorkoutStatus(workout, latestSession) {
+  if (latestSession?.completedAt) return 'Realizado';
+  if (latestSession?.startedAt && !latestSession?.completedAt) return 'Pendente';
+  const days = Array.isArray(workout.scheduled_days) ? workout.scheduled_days.map(Number) : [];
+  const today = new Date().getDay();
+  if (days.includes(today)) return 'Pendente';
+  if (days.some((day) => day < today)) return 'Não Realizado';
+  return 'Pendente';
+}
+
 async function ensureAtlasSchema() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS atlas_users (
@@ -1659,11 +1669,42 @@ app.delete('/atlas-api/templates/:id', atlasRequireAuth, atlasRole('trainer'), a
 
 app.post('/atlas-api/workouts', atlasRequireAuth, atlasRole('trainer'), asyncRoute(async (req, res) => {
   const studentId = String(req.body?.studentId || '');
-  const name = text(req.body?.name, 'Nome do treino', true, 120);
+  const templateId = req.body?.templateId ? String(req.body.templateId) : null;
+
+  let template = null;
+  let templateExercises = [];
+  if (templateId) {
+    const { rows } = await pool.query(
+      'SELECT * FROM atlas_workout_templates WHERE id = $1 AND trainer_id = $2',
+      [templateId, req.atlasUser.id]
+    );
+    template = rows[0];
+    if (!template) return res.status(404).json({ error: 'Template não encontrado.' });
+    const result = await pool.query(`
+      SELECT exercise_id AS "exerciseId", name, sets, reps,
+             suggested_weight::float8 AS "suggestedWeight",
+             rest_seconds AS "restSeconds", video_url AS "videoUrl", notes
+      FROM atlas_template_exercises
+      WHERE template_id = $1
+      ORDER BY position
+    `, [templateId]);
+    templateExercises = result.rows;
+  }
+
+  const rawName = req.body?.name ?? template?.name;
+  const name = text(rawName, 'Nome do treino', true, 120);
   const model = text(req.body?.model, 'Modelo', true, 30).toUpperCase();
-  const notes = text(req.body?.notes, 'Observações', false, 1000) || '';
+  const description = text(req.body?.description ?? template?.description, 'Descrição', false, 2000) || '';
+  const intensity = text(req.body?.intensity ?? template?.intensity, 'Intensidade', false, 40) || 'Moderada';
+  const notes = text(req.body?.notes ?? template?.notes, 'Observações', false, 3000) || '';
+  const estimatedMinutes = Math.max(
+    0,
+    Math.min(600, Number.parseInt(req.body?.estimatedMinutes ?? template?.estimated_minutes, 10) || 0)
+  );
   const scheduledDays = atlasDays(req.body?.scheduledDays);
-  const exercises = Array.isArray(req.body?.exercises) ? req.body.exercises : [];
+  const exercises = Array.isArray(req.body?.exercises) && req.body.exercises.length
+    ? req.body.exercises
+    : templateExercises;
   if (!exercises.length) return res.status(400).json({ error: 'Adicione pelo menos um exercício.' });
 
   const linked = await pool.query(
@@ -1676,7 +1717,7 @@ app.post('/atlas-api/workouts', atlasRequireAuth, atlasRole('trainer'), asyncRou
     'SELECT day_of_week FROM atlas_availability WHERE student_id = $1 ORDER BY day_of_week',
     [studentId]
   );
-  const availability = availabilityResult.rows.map((item) => item.day_of_week);
+  const availability = availabilityResult.rows.map((item) => Number(item.day_of_week));
   if (!availability.length) return res.status(400).json({ error: 'O aluno ainda não informou a disponibilidade.' });
   if (scheduledDays.some((dayOfWeek) => !availability.includes(dayOfWeek))) {
     return res.status(400).json({ error: 'O treino só pode ser marcado em dias informados pelo aluno.', availability });
@@ -1686,11 +1727,13 @@ app.post('/atlas-api/workouts', atlasRequireAuth, atlasRole('trainer'), asyncRou
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    await client.query(
-      `INSERT INTO atlas_workouts (id, trainer_id, student_id, name, model, notes, scheduled_days)
-       VALUES ($1, $2, $3, $4, $5, $6, $7::smallint[])`,
-      [workoutId, req.atlasUser.id, studentId, name, model, notes, scheduledDays]
-    );
+    await client.query(`
+      INSERT INTO atlas_workouts
+        (id, trainer_id, student_id, name, model, description, intensity,
+         estimated_minutes, template_id, notes, scheduled_days)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::smallint[])
+    `, [workoutId, req.atlasUser.id, studentId, name, model, description, intensity,
+        estimatedMinutes, templateId, notes, scheduledDays]);
 
     for (let index = 0; index < exercises.length; index += 1) {
       const exercise = exercises[index] || {};
@@ -1699,14 +1742,25 @@ app.post('/atlas-api/workouts', atlasRequireAuth, atlasRole('trainer'), asyncRou
       const reps = Math.max(1, Number.parseInt(exercise.reps, 10) || 1);
       const suggestedWeight = Math.max(0, Number(exercise.suggestedWeight) || 0);
       const restSeconds = Math.max(0, Number.parseInt(exercise.restSeconds, 10) || 0);
+      const exerciseId = exercise.exerciseId ? String(exercise.exerciseId) : null;
+      const exerciseNotes = text(exercise.notes, 'Observações do exercício', false, 1000) || '';
+      const videoUrl = text(exercise.videoUrl, 'Vídeo do exercício', false, 1800) || null;
 
-      await client.query(
-        `INSERT INTO atlas_workout_exercises
-          (id, workout_id, name, sets, reps, suggested_weight, rest_seconds, position)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-        [crypto.randomUUID(), workoutId, exerciseName, sets, reps, suggestedWeight, restSeconds, index]
-      );
+      await client.query(`
+        INSERT INTO atlas_workout_exercises
+          (id, workout_id, exercise_id, name, sets, reps, suggested_weight,
+           rest_seconds, notes, video_url, position)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      `, [crypto.randomUUID(), workoutId, exerciseId, exerciseName, sets, reps,
+          suggestedWeight, restSeconds, exerciseNotes, videoUrl, index]);
     }
+
+    await client.query(`
+      INSERT INTO atlas_notifications
+        (id, user_id, type, title, body, reference_id, occurrence_key)
+      VALUES ($1, $2, 'workout_prescribed', 'Novo treino prescrito', $3, $4, '')
+      ON CONFLICT (user_id, type, reference_id, occurrence_key) DO NOTHING
+    `, [crypto.randomUUID(), studentId, name, workoutId]);
 
     await client.query('COMMIT');
   } catch (error) {
@@ -1716,13 +1770,17 @@ app.post('/atlas-api/workouts', atlasRequireAuth, atlasRole('trainer'), asyncRou
     client.release();
   }
 
-  res.status(201).json({ id: workoutId, name, model, scheduledDays });
+  res.status(201).json({
+    id: workoutId, name, model, description, intensity, estimatedMinutes,
+    templateId, scheduledDays,
+  });
 }));
 
 app.get('/atlas-api/workouts', atlasRequireAuth, asyncRoute(async (req, res) => {
   const ownerColumn = req.atlasUser.role === 'trainer' ? 'w.trainer_id' : 'w.student_id';
   const { rows: workouts } = await pool.query(`
-    SELECT w.*, t.name AS trainer_name, s.name AS student_name
+    SELECT w.*, t.name AS trainer_name, t.avatar_url AS trainer_avatar_url,
+           s.name AS student_name
     FROM atlas_workouts w
     JOIN atlas_users t ON t.id = w.trainer_id
     JOIN atlas_users s ON s.id = w.student_id
@@ -1733,24 +1791,27 @@ app.get('/atlas-api/workouts', atlasRequireAuth, asyncRoute(async (req, res) => 
   const result = [];
   for (const workout of workouts) {
     const { rows: exercises } = await pool.query(`
-      SELECT id, name, sets, reps, suggested_weight::float8 AS "suggestedWeight",
-             rest_seconds AS "restSeconds", position
+      SELECT id, exercise_id AS "exerciseId", name, sets, reps,
+             suggested_weight::float8 AS "suggestedWeight",
+             rest_seconds AS "restSeconds", notes, video_url AS "videoUrl", position
       FROM atlas_workout_exercises
       WHERE workout_id = $1
       ORDER BY position
     `, [workout.id]);
 
     const { rows: sessions } = await pool.query(`
-      SELECT id, started_at AS "startedAt", completed_at AS "completedAt"
+      SELECT id, started_at AS "startedAt", completed_at AS "completedAt", notes
       FROM atlas_workout_sessions
       WHERE workout_id = $1 AND student_id = $2
       ORDER BY started_at DESC
       LIMIT 1
     `, [workout.id, workout.student_id]);
 
+    const latestSession = sessions[0] || null;
     result.push({
       ...atlasWorkoutPayload(workout, exercises),
-      latestSession: sessions[0] || null,
+      latestSession,
+      status: atlasWorkoutStatus(workout, latestSession),
     });
   }
 
