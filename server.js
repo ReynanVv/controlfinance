@@ -660,14 +660,32 @@ function atlasInviteHash(token) {
   return crypto.createHash('sha256').update('atlas-invite:' + String(token)).digest('hex');
 }
 
-async function atlasCreateSession(userId) {
+async function atlasUserProfiles(userId) {
+  const { rows } = await pool.query(
+    'SELECT profile FROM atlas_user_profiles WHERE user_id = $1 ORDER BY profile',
+    [userId]
+  );
+  return rows.map((row) => row.profile);
+}
+
+async function atlasCreateSession(userId, requestedRole = null) {
+  const profiles = await atlasUserProfiles(userId);
+  const { rows: users } = await pool.query(
+    'SELECT role FROM atlas_users WHERE id = $1',
+    [userId]
+  );
+  const defaultRole = requestedRole && profiles.includes(requestedRole)
+    ? requestedRole
+    : (profiles.includes(users[0]?.role) ? users[0].role : profiles[0]);
+  if (!defaultRole) throw new Error('Usuário sem perfil ativo.');
+
   const token = crypto.randomBytes(32).toString('hex');
   await pool.query(
-    `INSERT INTO atlas_sessions (id, user_id, token_hash, expires_at)
-     VALUES ($1, $2, $3, NOW() + INTERVAL '7 days')`,
-    [crypto.randomUUID(), userId, atlasTokenHash(token)]
+    `INSERT INTO atlas_sessions (id, user_id, token_hash, active_role, expires_at)
+     VALUES ($1, $2, $3, $4, NOW() + INTERVAL '7 days')`,
+    [crypto.randomUUID(), userId, atlasTokenHash(token), defaultRole]
   );
-  return token;
+  return { token, role: defaultRole, profiles };
 }
 
 async function atlasRequireAuth(req, res, next) {
@@ -678,13 +696,15 @@ async function atlasRequireAuth(req, res, next) {
 
     const tokenHash = atlasTokenHash(token);
     const { rows } = await pool.query(`
-      SELECT u.id, u.name, u.email, u.role
+      SELECT u.id, u.name, u.email, u.avatar_url AS "avatarUrl",
+             COALESCE(s.active_role, u.role) AS role
       FROM atlas_sessions s
       JOIN atlas_users u ON u.id = s.user_id
       WHERE s.token_hash = $1 AND s.expires_at > NOW()
     `, [tokenHash]);
 
     if (!rows[0]) return res.status(401).json({ error: 'Sessão inválida ou expirada.' });
+    rows[0].profiles = await atlasUserProfiles(rows[0].id);
     req.atlasUser = rows[0];
     req.atlasTokenHash = tokenHash;
     next();
@@ -714,9 +734,14 @@ function atlasWorkoutPayload(row, exercises = []) {
     trainerId: row.trainer_id,
     studentId: row.student_id,
     trainerName: row.trainer_name,
+    trainerAvatarUrl: row.trainer_avatar_url || null,
     studentName: row.student_name,
     name: row.name,
     model: row.model,
+    description: row.description || '',
+    intensity: row.intensity || 'Moderada',
+    estimatedMinutes: Number(row.estimated_minutes || 0),
+    templateId: row.template_id || null,
     notes: row.notes,
     scheduledDays: row.scheduled_days || [],
     createdAt: row.created_at,
