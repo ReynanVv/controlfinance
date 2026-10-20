@@ -161,6 +161,7 @@ async function workoutPayload(pool, workout) {
 export async function ensureAtlasExtraSchema(pool) {
   await pool.query(`
     ALTER TABLE atlas_users ADD COLUMN IF NOT EXISTS avatar_url TEXT;
+    ALTER TABLE atlas_sessions ADD COLUMN IF NOT EXISTS active_role TEXT;
     ALTER TABLE atlas_workouts ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '';
     ALTER TABLE atlas_workouts ADD COLUMN IF NOT EXISTS intensity TEXT NOT NULL DEFAULT 'Moderada';
     ALTER TABLE atlas_workouts ADD COLUMN IF NOT EXISTS estimated_minutes INTEGER NOT NULL DEFAULT 0;
@@ -314,7 +315,10 @@ export function registerAtlasExtraRoutes({ app, pool, atlasRequireAuth, atlasRol
       if (!profiles.includes(profile)) {
         return res.status(403).json({ error: 'Este perfil não está ativo na sua conta.' });
       }
-      await pool.query('UPDATE atlas_users SET role = $2 WHERE id = $1', [req.atlasUser.id, profile]);
+      await pool.query(
+        'UPDATE atlas_sessions SET active_role = $2 WHERE token_hash = $1',
+        [req.atlasTokenHash, profile]
+      );
       res.json({ user: { ...req.atlasUser, role: profile, profiles } });
     } catch (error) { next(error); }
   });
