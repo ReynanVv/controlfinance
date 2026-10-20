@@ -720,6 +720,76 @@ function atlasRole(role) {
   };
 }
 
+async function atlasLinkedPair(user, otherUserId) {
+  const trainerId = user.role === 'trainer' ? user.id : String(otherUserId || '');
+  const studentId = user.role === 'student' ? user.id : String(otherUserId || '');
+  if (!trainerId || !studentId) return null;
+  const { rows } = await pool.query(
+    `SELECT ts.trainer_id AS "trainerId", ts.student_id AS "studentId",
+            t.name AS "trainerName", s.name AS "studentName"
+     FROM atlas_trainer_students ts
+     JOIN atlas_users t ON t.id = ts.trainer_id
+     JOIN atlas_users s ON s.id = ts.student_id
+     WHERE ts.trainer_id = $1 AND ts.student_id = $2`,
+    [trainerId, studentId]
+  );
+  return rows[0] || null;
+}
+
+async function atlasProgressForStudent(studentId, trainerId = null) {
+  const params = [studentId];
+  let trainerClause = '';
+  if (trainerId) {
+    params.push(trainerId);
+    trainerClause = ` AND w.trainer_id = ${params.length}`;
+  }
+
+  const { rows: sessions } = await pool.query(`
+    SELECT ws.id, ws.workout_id AS "workoutId", w.name AS "workoutName",
+           w.trainer_id AS "trainerId", ws.started_at AS "startedAt",
+           ws.completed_at AS "completedAt", ws.notes,
+           COALESCE(SUM(sl.weight * sl.reps), 0)::float8 AS volume,
+           COALESCE(MAX(sl.weight), 0)::float8 AS "maxWeight",
+           COUNT(sl.id)::int AS "setCount"
+    FROM atlas_workout_sessions ws
+    JOIN atlas_workouts w ON w.id = ws.workout_id
+    LEFT JOIN atlas_set_logs sl ON sl.session_id = ws.id AND sl.completed = TRUE
+    WHERE ws.student_id = $1 AND ws.completed_at IS NOT NULL ${trainerClause}
+    GROUP BY ws.id, w.id
+    ORDER BY ws.completed_at ASC
+  `, params);
+
+  const { rows: exercises } = await pool.query(`
+    SELECT e.name,
+           COALESCE(MAX(sl.weight), 0)::float8 AS "maxWeight",
+           COALESCE(SUM(sl.weight * sl.reps), 0)::float8 AS volume,
+           COUNT(DISTINCT ws.id)::int AS sessions
+    FROM atlas_set_logs sl
+    JOIN atlas_workout_sessions ws ON ws.id = sl.session_id
+    JOIN atlas_workouts w ON w.id = ws.workout_id
+    JOIN atlas_workout_exercises e ON e.id = sl.exercise_id
+    WHERE ws.student_id = $1 AND ws.completed_at IS NOT NULL AND sl.completed = TRUE ${trainerClause}
+    GROUP BY e.name
+    ORDER BY "maxWeight" DESC, volume DESC
+  `, params);
+
+  const totalVolume = sessions.reduce((sum, item) => sum + Number(item.volume || 0), 0);
+  const maxWeight = sessions.reduce((max, item) => Math.max(max, Number(item.maxWeight || 0)), 0);
+  const last30Cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  const last30 = sessions.filter((item) => new Date(item.completedAt).getTime() >= last30Cutoff).length;
+
+  return {
+    summary: {
+      completedWorkouts: sessions.length,
+      workoutsLast30Days: last30,
+      totalVolume,
+      maxWeight,
+    },
+    sessions,
+    exercises,
+  };
+}
+
 function atlasDays(value) {
   const days = [...new Set((Array.isArray(value) ? value : []).map(Number))].sort((a, b) => a - b);
   if (!days.length || days.some((item) => !Number.isInteger(item) || item < 0 || item > 6)) {
@@ -1936,6 +2006,175 @@ app.post('/atlas-api/sessions/:id/complete', atlasRequireAuth, atlasRole('studen
   res.json(rows[0]);
 }));
 
+
+app.get('/atlas-api/messages/contacts', atlasRequireAuth, asyncRoute(async (req, res) => {
+  let rows;
+  if (req.atlasUser.role === 'trainer') {
+    ({ rows } = await pool.query(`
+      SELECT u.id, u.name, u.email, u.avatar_url AS "avatarUrl",
+             lm.body AS "lastMessage", lm.created_at AS "lastMessageAt",
+             COALESCE(unread.count, 0)::int AS "unreadCount"
+      FROM atlas_trainer_students ts
+      JOIN atlas_users u ON u.id = ts.student_id
+      LEFT JOIN LATERAL (
+        SELECT body, created_at
+        FROM atlas_messages m
+        WHERE m.trainer_id = ts.trainer_id AND m.student_id = ts.student_id
+        ORDER BY created_at DESC LIMIT 1
+      ) lm ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT COUNT(*) AS count
+        FROM atlas_messages m
+        WHERE m.trainer_id = ts.trainer_id AND m.student_id = ts.student_id
+          AND m.sender_id <> $1 AND m.read_at IS NULL
+      ) unread ON TRUE
+      WHERE ts.trainer_id = $1
+      ORDER BY COALESCE(lm.created_at, ts.linked_at) DESC
+    `, [req.atlasUser.id]));
+  } else {
+    ({ rows } = await pool.query(`
+      SELECT u.id, u.name, u.email, u.avatar_url AS "avatarUrl",
+             lm.body AS "lastMessage", lm.created_at AS "lastMessageAt",
+             COALESCE(unread.count, 0)::int AS "unreadCount"
+      FROM atlas_trainer_students ts
+      JOIN atlas_users u ON u.id = ts.trainer_id
+      LEFT JOIN LATERAL (
+        SELECT body, created_at
+        FROM atlas_messages m
+        WHERE m.trainer_id = ts.trainer_id AND m.student_id = ts.student_id
+        ORDER BY created_at DESC LIMIT 1
+      ) lm ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT COUNT(*) AS count
+        FROM atlas_messages m
+        WHERE m.trainer_id = ts.trainer_id AND m.student_id = ts.student_id
+          AND m.sender_id <> $1 AND m.read_at IS NULL
+      ) unread ON TRUE
+      WHERE ts.student_id = $1
+      ORDER BY COALESCE(lm.created_at, ts.linked_at) DESC
+    `, [req.atlasUser.id]));
+  }
+  res.json(rows);
+}));
+
+app.get('/atlas-api/messages/:userId', atlasRequireAuth, asyncRoute(async (req, res) => {
+  const pair = await atlasLinkedPair(req.atlasUser, req.params.userId);
+  if (!pair) return res.status(404).json({ error: 'Contato não vinculado.' });
+
+  await pool.query(`
+    UPDATE atlas_messages
+    SET read_at = NOW()
+    WHERE trainer_id = $1 AND student_id = $2
+      AND sender_id <> $3 AND read_at IS NULL
+  `, [pair.trainerId, pair.studentId, req.atlasUser.id]);
+
+  const { rows } = await pool.query(`
+    SELECT id, sender_id AS "senderId", body, created_at AS "createdAt",
+           read_at AS "readAt"
+    FROM atlas_messages
+    WHERE trainer_id = $1 AND student_id = $2
+    ORDER BY created_at ASC
+    LIMIT 300
+  `, [pair.trainerId, pair.studentId]);
+  res.json({ contact: pair, messages: rows });
+}));
+
+app.post('/atlas-api/messages/:userId', atlasRequireAuth, asyncRoute(async (req, res) => {
+  const pair = await atlasLinkedPair(req.atlasUser, req.params.userId);
+  if (!pair) return res.status(404).json({ error: 'Contato não vinculado.' });
+  const body = text(req.body?.body, 'Mensagem', true, 2000);
+
+  const id = crypto.randomUUID();
+  const { rows } = await pool.query(`
+    INSERT INTO atlas_messages
+      (id, trainer_id, student_id, sender_id, body)
+    VALUES ($1, $2, $3, $4, $5)
+    RETURNING id, sender_id AS "senderId", body, created_at AS "createdAt"
+  `, [id, pair.trainerId, pair.studentId, req.atlasUser.id, body]);
+
+  const recipientId = req.atlasUser.id === pair.trainerId ? pair.studentId : pair.trainerId;
+  await pool.query(`
+    INSERT INTO atlas_notifications
+      (id, user_id, type, title, body, reference_id, occurrence_key)
+    VALUES ($1, $2, 'message', 'Nova mensagem', $3, $4, $5)
+    ON CONFLICT (user_id, type, reference_id, occurrence_key) DO NOTHING
+  `, [crypto.randomUUID(), recipientId, body.slice(0, 180), id, id]);
+
+  res.status(201).json(rows[0]);
+}));
+
+app.get('/atlas-api/notifications', atlasRequireAuth, asyncRoute(async (req, res) => {
+  if (req.atlasUser.role === 'student') {
+    const today = new Date();
+    const dayOfWeek = today.getDay();
+    const occurrenceKey = today.toISOString().slice(0, 10);
+    const { rows: dueWorkouts } = await pool.query(`
+      SELECT id, name
+      FROM atlas_workouts
+      WHERE student_id = $1 AND $2 = ANY(scheduled_days)
+    `, [req.atlasUser.id, dayOfWeek]);
+
+    for (const workout of dueWorkouts) {
+      await pool.query(`
+        INSERT INTO atlas_notifications
+          (id, user_id, type, title, body, reference_id, occurrence_key)
+        VALUES ($1, $2, 'workout_reminder', 'Treino de hoje', $3, $4, $5)
+        ON CONFLICT (user_id, type, reference_id, occurrence_key) DO NOTHING
+      `, [crypto.randomUUID(), req.atlasUser.id, workout.name, workout.id, occurrenceKey]);
+    }
+  }
+
+  const { rows } = await pool.query(`
+    SELECT id, type, title, body, reference_id AS "referenceId",
+           read_at AS "readAt", created_at AS "createdAt"
+    FROM atlas_notifications
+    WHERE user_id = $1
+    ORDER BY created_at DESC
+    LIMIT 100
+  `, [req.atlasUser.id]);
+  res.json(rows);
+}));
+
+app.post('/atlas-api/notifications/:id/read', atlasRequireAuth, asyncRoute(async (req, res) => {
+  const { rows } = await pool.query(`
+    UPDATE atlas_notifications
+    SET read_at = NOW()
+    WHERE id = $1 AND user_id = $2
+    RETURNING id, read_at AS "readAt"
+  `, [req.params.id, req.atlasUser.id]);
+  if (!rows[0]) return res.status(404).json({ error: 'Notificação não encontrada.' });
+  res.json(rows[0]);
+}));
+
+app.post('/atlas-api/notifications/read-all', atlasRequireAuth, asyncRoute(async (req, res) => {
+  await pool.query(
+    'UPDATE atlas_notifications SET read_at = NOW() WHERE user_id = $1 AND read_at IS NULL',
+    [req.atlasUser.id]
+  );
+  res.json({ ok: true });
+}));
+
+app.get('/atlas-api/progress/me', atlasRequireAuth, atlasRole('student'), asyncRoute(async (req, res) => {
+  res.json(await atlasProgressForStudent(req.atlasUser.id));
+}));
+
+app.get('/atlas-api/trainer/students/:id/progress', atlasRequireAuth, atlasRole('trainer'), asyncRoute(async (req, res) => {
+  const pair = await atlasLinkedPair(req.atlasUser, req.params.id);
+  if (!pair) return res.status(404).json({ error: 'Aluno não vinculado.' });
+  res.json(await atlasProgressForStudent(req.params.id, req.atlasUser.id));
+}));
+
+app.get('/atlas-api/trainer/students/:id/report', atlasRequireAuth, atlasRole('trainer'), asyncRoute(async (req, res) => {
+  const pair = await atlasLinkedPair(req.atlasUser, req.params.id);
+  if (!pair) return res.status(404).json({ error: 'Aluno não vinculado.' });
+  const progress = await atlasProgressForStudent(req.params.id, req.atlasUser.id);
+  res.json({
+    generatedAt: new Date().toISOString(),
+    student: { id: pair.studentId, name: pair.studentName },
+    trainer: { id: pair.trainerId, name: pair.trainerName },
+    ...progress,
+  });
+}));
 
 const ATLAS_DEMO_TRAINER_ID = '11111111-1111-4111-8111-111111111111';
 const ATLAS_DEMO_STUDENT_ID = '22222222-2222-4222-8222-222222222222';
