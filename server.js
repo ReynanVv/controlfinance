@@ -4,6 +4,7 @@ import { promisify } from 'node:util';
 import express from 'express';
 import cookieParser from 'cookie-parser';
 import pg from 'pg';
+import { ensureAtlasExtraSchema, registerAtlasExtraRoutes } from './atlas-extra.js';
 
 const { Pool } = pg;
 const scryptAsync = promisify(crypto.scrypt);
@@ -34,7 +35,7 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(express.json({ limit: '128kb' }));
+app.use(express.json({ limit: '12mb' }));
 app.use(express.urlencoded({ extended: false, limit: '32kb' }));
 app.use(cookieParser(SESSION_SECRET));
 app.use(express.static('public'));
@@ -837,6 +838,8 @@ async function ensureAtlasSchema() {
     SET name = EXCLUDED.name, role = EXCLUDED.role, password_hash = EXCLUDED.password_hash
   `, [trainerPassword, studentPassword]);
 }
+
+registerAtlasExtraRoutes({ app, pool, atlasRequireAuth, atlasRole });
 
 app.get('/atlas-api/health', (_req, res) => {
   res.json({ ok: true, service: 'atlas-api', database: 'shared-postgres' });
@@ -1876,6 +1879,6 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`ControlFinance rodando na porta ${PORT}`);
 });
 
-Promise.all([ensureSchema(), ensureAtlasSchema()])
+Promise.all([ensureSchema(), ensureAtlasSchema(), ensureAtlasExtraSchema(pool)])
   .then(() => console.log('Schemas ControlFinance/Atlas verificados.'))
   .catch((error) => console.error('Falha ao verificar schemas:', error));
