@@ -319,10 +319,6 @@ export function registerAtlasExtraRoutes({ app, pool, atlasRequireAuth, atlasRol
         'UPDATE atlas_sessions SET active_role = $2 WHERE token_hash = $1',
         [req.atlasTokenHash, profile]
       );
-      await pool.query(
-        'UPDATE atlas_users SET role = $2 WHERE id = $1',
-        [req.atlasUser.id, profile]
-      );
       res.json({ user: { ...req.atlasUser, role: profile, profiles } });
     } catch (error) { next(error); }
   });
