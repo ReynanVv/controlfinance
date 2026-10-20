@@ -330,14 +330,15 @@ export function registerAtlasExtraRoutes({ app, pool, atlasRequireAuth, atlasRol
         : cleanText(req.body.name, 'Nome', true, 120);
       const avatarUrl = req.body?.avatarUrl == null
         ? null
-        : cleanText(req.body.avatarUrl, 'Foto de perfil', false, 1800) || null;
+        : cleanText(req.body.avatarUrl, 'Foto de perfil', false, 1600000) || null;
       const { rows } = await pool.query(
         `UPDATE atlas_users SET name = $2, avatar_url = COALESCE($3, avatar_url)
          WHERE id = $1
          RETURNING id, name, email, role, avatar_url AS "avatarUrl"`,
         [req.atlasUser.id, name, avatarUrl]
       );
-      res.json({ user: { ...rows[0], profiles: await getProfiles(pool, rows[0]) } });
+      const profiles = await getProfiles(pool, { ...rows[0], role: req.atlasUser.role });
+      res.json({ user: { ...rows[0], role: req.atlasUser.role, profiles } });
     } catch (error) { next(error); }
   });
 
