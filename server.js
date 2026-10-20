@@ -1367,6 +1367,296 @@ app.get('/atlas-api/trainer/students', atlasRequireAuth, atlasRole('trainer'), a
   res.json(rows);
 }));
 
+app.get('/atlas-api/exercises', atlasRequireAuth, atlasRole('trainer'), asyncRoute(async (req, res) => {
+  const params = [req.atlasUser.id];
+  const where = ['(e.owner_id IS NULL OR e.owner_id = $1)'];
+
+  const name = String(req.query.name || '').trim();
+  const category = String(req.query.category || '').trim();
+  const muscle = String(req.query.muscle || '').trim();
+  const intensity = String(req.query.intensity || '').trim();
+
+  if (name) {
+    params.push(`%${name}%`);
+    where.push(`e.name ILIKE ${params.length}`);
+  }
+  if (category) {
+    params.push(category);
+    where.push(`e.category ILIKE ${params.length}`);
+  }
+  if (muscle) {
+    params.push(`%${muscle}%`);
+    where.push(`EXISTS (SELECT 1 FROM unnest(e.muscle_groups) AS mg WHERE mg ILIKE ${params.length})`);
+  }
+  if (intensity) {
+    params.push(intensity);
+    where.push(`e.intensity ILIKE ${params.length}`);
+  }
+
+  const { rows } = await pool.query(`
+    SELECT e.id, e.name, e.category, e.muscle_groups AS "muscleGroups",
+           e.intensity, e.description, e.video_url AS "videoUrl",
+           (e.video_data IS NOT NULL) AS "hasUploadedVideo",
+           e.video_mime AS "videoMime", e.video_filename AS "videoFilename",
+           e.owner_id AS "ownerId", e.created_at AS "createdAt"
+    FROM atlas_exercises e
+    WHERE ${where.join(' AND ')}
+    ORDER BY e.name
+  `, params);
+
+  res.json(rows);
+}));
+
+app.post('/atlas-api/exercises', atlasRequireAuth, atlasRole('trainer'), asyncRoute(async (req, res) => {
+  const name = text(req.body?.name, 'Nome do exercício', true, 120);
+  const category = text(req.body?.category, 'Categoria', false, 80) || '';
+  const muscleGroups = Array.isArray(req.body?.muscleGroups)
+    ? [...new Set(req.body.muscleGroups.map((item) => String(item || '').trim()).filter(Boolean))].slice(0, 12)
+    : [];
+  const intensity = text(req.body?.intensity, 'Intensidade', false, 40) || 'Moderada';
+  const description = text(req.body?.description, 'Descrição', false, 3000) || '';
+  const videoUrl = text(req.body?.videoUrl, 'URL do vídeo', false, 1800) || null;
+
+  let videoData = null;
+  let videoMime = null;
+  let videoFilename = null;
+  const rawBase64 = String(req.body?.videoBase64 || '');
+  if (rawBase64) {
+    videoMime = String(req.body?.videoMime || '').trim();
+    videoFilename = String(req.body?.videoFilename || 'video').slice(0, 180);
+    if (!videoMime.startsWith('video/')) return res.status(400).json({ error: 'O arquivo enviado precisa ser um vídeo.' });
+    const payload = rawBase64.includes(',') ? rawBase64.slice(rawBase64.indexOf(',') + 1) : rawBase64;
+    try {
+      videoData = Buffer.from(payload, 'base64');
+    } catch {
+      return res.status(400).json({ error: 'Vídeo inválido.' });
+    }
+    if (!videoData.length || videoData.length > 8 * 1024 * 1024) {
+      return res.status(400).json({ error: 'O vídeo precisa ter no máximo 8 MB.' });
+    }
+  }
+
+  const id = crypto.randomUUID();
+  const { rows } = await pool.query(`
+    INSERT INTO atlas_exercises
+      (id, owner_id, name, category, muscle_groups, intensity, description,
+       video_url, video_data, video_mime, video_filename)
+    VALUES ($1, $2, $3, $4, $5::text[], $6, $7, $8, $9, $10, $11)
+    RETURNING id, name, category, muscle_groups AS "muscleGroups", intensity,
+              description, video_url AS "videoUrl",
+              (video_data IS NOT NULL) AS "hasUploadedVideo",
+              video_mime AS "videoMime", video_filename AS "videoFilename"
+  `, [id, req.atlasUser.id, name, category, muscleGroups, intensity, description,
+      videoUrl, videoData, videoMime, videoFilename]);
+
+  res.status(201).json(rows[0]);
+}));
+
+app.patch('/atlas-api/exercises/:id', atlasRequireAuth, atlasRole('trainer'), asyncRoute(async (req, res) => {
+  const { rows: currentRows } = await pool.query(
+    'SELECT * FROM atlas_exercises WHERE id = $1 AND owner_id = $2',
+    [req.params.id, req.atlasUser.id]
+  );
+  const current = currentRows[0];
+  if (!current) return res.status(404).json({ error: 'Exercício não encontrado.' });
+
+  const name = req.body?.name == null ? current.name : text(req.body.name, 'Nome do exercício', true, 120);
+  const category = req.body?.category == null ? current.category : (text(req.body.category, 'Categoria', false, 80) || '');
+  const muscleGroups = req.body?.muscleGroups == null
+    ? current.muscle_groups
+    : [...new Set((Array.isArray(req.body.muscleGroups) ? req.body.muscleGroups : []).map((item) => String(item || '').trim()).filter(Boolean))].slice(0, 12);
+  const intensity = req.body?.intensity == null ? current.intensity : (text(req.body.intensity, 'Intensidade', false, 40) || 'Moderada');
+  const description = req.body?.description == null ? current.description : (text(req.body.description, 'Descrição', false, 3000) || '');
+  const videoUrl = req.body?.videoUrl == null ? current.video_url : (text(req.body.videoUrl, 'URL do vídeo', false, 1800) || null);
+
+  const { rows } = await pool.query(`
+    UPDATE atlas_exercises
+    SET name = $3, category = $4, muscle_groups = $5::text[], intensity = $6,
+        description = $7, video_url = $8, updated_at = NOW()
+    WHERE id = $1 AND owner_id = $2
+    RETURNING id, name, category, muscle_groups AS "muscleGroups", intensity,
+              description, video_url AS "videoUrl",
+              (video_data IS NOT NULL) AS "hasUploadedVideo"
+  `, [req.params.id, req.atlasUser.id, name, category, muscleGroups, intensity, description, videoUrl]);
+
+  res.json(rows[0]);
+}));
+
+app.delete('/atlas-api/exercises/:id', atlasRequireAuth, atlasRole('trainer'), asyncRoute(async (req, res) => {
+  const result = await pool.query(
+    'DELETE FROM atlas_exercises WHERE id = $1 AND owner_id = $2',
+    [req.params.id, req.atlasUser.id]
+  );
+  if (!result.rowCount) return res.status(404).json({ error: 'Exercício não encontrado.' });
+  res.status(204).end();
+}));
+
+app.get('/atlas-api/exercises/:id/video', atlasRequireAuth, asyncRoute(async (req, res) => {
+  const { rows } = await pool.query(`
+    SELECT e.video_data, e.video_mime, e.video_filename
+    FROM atlas_exercises e
+    WHERE e.id = $1
+      AND (
+        e.owner_id = $2
+        OR EXISTS (
+          SELECT 1
+          FROM atlas_workout_exercises we
+          JOIN atlas_workouts w ON w.id = we.workout_id
+          WHERE we.exercise_id = e.id
+            AND (w.trainer_id = $2 OR w.student_id = $2)
+        )
+      )
+  `, [req.params.id, req.atlasUser.id]);
+  const video = rows[0];
+  if (!video?.video_data) return res.status(404).json({ error: 'Vídeo enviado não encontrado.' });
+  res.setHeader('Content-Type', video.video_mime || 'video/mp4');
+  res.setHeader('Content-Disposition', `inline; filename="${String(video.video_filename || 'video').replace(/"/g, '')}"`);
+  res.send(video.video_data);
+}));
+
+app.get('/atlas-api/templates', atlasRequireAuth, atlasRole('trainer'), asyncRoute(async (req, res) => {
+  const { rows: templates } = await pool.query(`
+    SELECT id, name, description, intensity, notes,
+           estimated_minutes AS "estimatedMinutes", created_at AS "createdAt",
+           updated_at AS "updatedAt"
+    FROM atlas_workout_templates
+    WHERE trainer_id = $1
+    ORDER BY updated_at DESC
+  `, [req.atlasUser.id]);
+
+  for (const template of templates) {
+    const { rows: exercises } = await pool.query(`
+      SELECT id, exercise_id AS "exerciseId", name, sets, reps,
+             suggested_weight::float8 AS "suggestedWeight",
+             rest_seconds AS "restSeconds", video_url AS "videoUrl",
+             notes, position
+      FROM atlas_template_exercises
+      WHERE template_id = $1
+      ORDER BY position
+    `, [template.id]);
+    template.exercises = exercises;
+  }
+  res.json(templates);
+}));
+
+app.post('/atlas-api/templates', atlasRequireAuth, atlasRole('trainer'), asyncRoute(async (req, res) => {
+  const name = text(req.body?.name, 'Nome do template', true, 120);
+  const description = text(req.body?.description, 'Descrição', false, 2000) || '';
+  const intensity = text(req.body?.intensity, 'Intensidade', false, 40) || 'Moderada';
+  const notes = text(req.body?.notes, 'Observações', false, 3000) || '';
+  const estimatedMinutes = Math.max(0, Math.min(600, Number.parseInt(req.body?.estimatedMinutes, 10) || 0));
+  const exercises = Array.isArray(req.body?.exercises) ? req.body.exercises : [];
+  if (!exercises.length) return res.status(400).json({ error: 'Adicione pelo menos um exercício ao template.' });
+
+  const templateId = crypto.randomUUID();
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(`
+      INSERT INTO atlas_workout_templates
+        (id, trainer_id, name, description, intensity, notes, estimated_minutes)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `, [templateId, req.atlasUser.id, name, description, intensity, notes, estimatedMinutes]);
+
+    for (let index = 0; index < exercises.length; index += 1) {
+      const exercise = exercises[index] || {};
+      const exerciseName = text(exercise.name, 'Exercício', true, 120);
+      const sets = Math.max(1, Number.parseInt(exercise.sets, 10) || 1);
+      const reps = Math.max(1, Number.parseInt(exercise.reps, 10) || 1);
+      const suggestedWeight = Math.max(0, Number(exercise.suggestedWeight) || 0);
+      const restSeconds = Math.max(0, Number.parseInt(exercise.restSeconds, 10) || 0);
+      const notesItem = text(exercise.notes, 'Observações do exercício', false, 1000) || '';
+      const videoUrlItem = text(exercise.videoUrl, 'Vídeo do exercício', false, 1800) || null;
+      const exerciseId = exercise.exerciseId ? String(exercise.exerciseId) : null;
+
+      await client.query(`
+        INSERT INTO atlas_template_exercises
+          (id, template_id, exercise_id, name, sets, reps, suggested_weight,
+           rest_seconds, video_url, notes, position)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      `, [crypto.randomUUID(), templateId, exerciseId, exerciseName, sets, reps,
+          suggestedWeight, restSeconds, videoUrlItem, notesItem, index]);
+    }
+
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+
+  res.status(201).json({ id: templateId, name });
+}));
+
+app.patch('/atlas-api/templates/:id', atlasRequireAuth, atlasRole('trainer'), asyncRoute(async (req, res) => {
+  const { rows: currentRows } = await pool.query(
+    'SELECT * FROM atlas_workout_templates WHERE id = $1 AND trainer_id = $2',
+    [req.params.id, req.atlasUser.id]
+  );
+  const current = currentRows[0];
+  if (!current) return res.status(404).json({ error: 'Template não encontrado.' });
+
+  const name = req.body?.name == null ? current.name : text(req.body.name, 'Nome do template', true, 120);
+  const description = req.body?.description == null ? current.description : (text(req.body.description, 'Descrição', false, 2000) || '');
+  const intensity = req.body?.intensity == null ? current.intensity : (text(req.body.intensity, 'Intensidade', false, 40) || 'Moderada');
+  const notes = req.body?.notes == null ? current.notes : (text(req.body.notes, 'Observações', false, 3000) || '');
+  const estimatedMinutes = req.body?.estimatedMinutes == null
+    ? current.estimated_minutes
+    : Math.max(0, Math.min(600, Number.parseInt(req.body.estimatedMinutes, 10) || 0));
+
+  await pool.query(`
+    UPDATE atlas_workout_templates
+    SET name = $3, description = $4, intensity = $5, notes = $6,
+        estimated_minutes = $7, updated_at = NOW()
+    WHERE id = $1 AND trainer_id = $2
+  `, [req.params.id, req.atlasUser.id, name, description, intensity, notes, estimatedMinutes]);
+
+  if (Array.isArray(req.body?.exercises)) {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('DELETE FROM atlas_template_exercises WHERE template_id = $1', [req.params.id]);
+      for (let index = 0; index < req.body.exercises.length; index += 1) {
+        const exercise = req.body.exercises[index] || {};
+        await client.query(`
+          INSERT INTO atlas_template_exercises
+            (id, template_id, exercise_id, name, sets, reps, suggested_weight,
+             rest_seconds, video_url, notes, position)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        `, [
+          crypto.randomUUID(), req.params.id, exercise.exerciseId || null,
+          text(exercise.name, 'Exercício', true, 120),
+          Math.max(1, Number.parseInt(exercise.sets, 10) || 1),
+          Math.max(1, Number.parseInt(exercise.reps, 10) || 1),
+          Math.max(0, Number(exercise.suggestedWeight) || 0),
+          Math.max(0, Number.parseInt(exercise.restSeconds, 10) || 0),
+          text(exercise.videoUrl, 'Vídeo do exercício', false, 1800) || null,
+          text(exercise.notes, 'Observações do exercício', false, 1000) || '',
+          index,
+        ]);
+      }
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  res.json({ id: req.params.id, name, description, intensity, notes, estimatedMinutes });
+}));
+
+app.delete('/atlas-api/templates/:id', atlasRequireAuth, atlasRole('trainer'), asyncRoute(async (req, res) => {
+  const result = await pool.query(
+    'DELETE FROM atlas_workout_templates WHERE id = $1 AND trainer_id = $2',
+    [req.params.id, req.atlasUser.id]
+  );
+  if (!result.rowCount) return res.status(404).json({ error: 'Template não encontrado.' });
+  res.status(204).end();
+}));
+
 app.post('/atlas-api/workouts', atlasRequireAuth, atlasRole('trainer'), asyncRoute(async (req, res) => {
   const studentId = String(req.body?.studentId || '');
   const name = text(req.body?.name, 'Nome do treino', true, 120);
