@@ -341,6 +341,87 @@ export function registerAtlasExtraRoutes({ app, pool, atlasRequireAuth, atlasRol
     } catch (error) { next(error); }
   });
 
+  app.get('/atlas-api/trainer/students', atlasRequireAuth, atlasRole('trainer'), async (req, res, next) => {
+    try {
+      const { rows } = await pool.query(
+        `SELECT u.id, u.name, u.email, u.avatar_url AS "avatarUrl",
+                COALESCE(array_agg(a.day_of_week ORDER BY a.day_of_week)
+                  FILTER (WHERE a.day_of_week IS NOT NULL), '{}') AS availability,
+                COUNT(DISTINCT w.id)::int AS "workoutCount"
+         FROM atlas_trainer_students ts
+         JOIN atlas_users u ON u.id = ts.student_id
+         LEFT JOIN atlas_availability a ON a.student_id = u.id
+         LEFT JOIN atlas_workouts w ON w.student_id = u.id AND w.trainer_id = ts.trainer_id
+         WHERE ts.trainer_id = $1
+         GROUP BY u.id, u.name, u.email, u.avatar_url
+         ORDER BY u.name`,
+        [req.atlasUser.id]
+      );
+      res.json(rows);
+    } catch (error) { next(error); }
+  });
+
+  app.get('/atlas-api/trainer/dashboard', atlasRequireAuth, atlasRole('trainer'), async (req, res, next) => {
+    try {
+      const { rows } = await pool.query(
+        `SELECT u.id, u.name, u.email, u.avatar_url AS "avatarUrl",
+                COUNT(DISTINCT w.id)::int AS "workoutCount",
+                COUNT(DISTINCT ws.id) FILTER (WHERE ws.completed_at IS NOT NULL)::int AS "completedWorkouts",
+                COALESCE(SUM(sl.weight * sl.reps) FILTER (WHERE ws.completed_at IS NOT NULL AND sl.completed = TRUE),0)::float8 AS "totalVolume",
+                COALESCE(MAX(sl.weight) FILTER (WHERE ws.completed_at IS NOT NULL AND sl.completed = TRUE),0)::float8 AS "maxWeight",
+                MAX(ws.completed_at) AS "lastCompletedAt"
+         FROM atlas_trainer_students ts
+         JOIN atlas_users u ON u.id = ts.student_id
+         LEFT JOIN atlas_workouts w ON w.student_id = u.id AND w.trainer_id = ts.trainer_id
+         LEFT JOIN atlas_workout_sessions ws ON ws.workout_id = w.id AND ws.student_id = u.id
+         LEFT JOIN atlas_set_logs sl ON sl.session_id = ws.id
+         WHERE ts.trainer_id = $1
+         GROUP BY u.id, u.name, u.email, u.avatar_url
+         ORDER BY u.name`,
+        [req.atlasUser.id]
+      );
+      const now = Date.now();
+      const attention = rows.filter((row) => {
+        if (!row.workoutCount || !row.lastCompletedAt) return true;
+        return now - new Date(row.lastCompletedAt).getTime() > 7 * 24 * 60 * 60 * 1000;
+      });
+      res.json({ students: rows, attention });
+    } catch (error) { next(error); }
+  });
+
+  app.get('/atlas-api/sessions/:id', atlasRequireAuth, atlasRole('student'), async (req, res, next) => {
+    try {
+      const { rows: sessions } = await pool.query(
+        `SELECT ws.id, ws.workout_id AS "workoutId", ws.started_at AS "startedAt",
+                ws.completed_at AS "completedAt", ws.notes, w.name AS "workoutName"
+         FROM atlas_workout_sessions ws
+         JOIN atlas_workouts w ON w.id = ws.workout_id
+         WHERE ws.id = $1 AND ws.student_id = $2`,
+        [req.params.id, req.atlasUser.id]
+      );
+      if (!sessions[0]) return res.status(404).json({ error: 'Execução não encontrada.' });
+      const { rows: exercises } = await pool.query(
+        `SELECT e.id, e.exercise_id AS "exerciseId", e.name, e.sets, e.reps,
+                e.suggested_weight::float8 AS "suggestedWeight",
+                e.rest_seconds AS "restSeconds", e.notes,
+                e.video_url AS "videoUrl", e.position
+         FROM atlas_workout_exercises e
+         WHERE e.workout_id = $1
+         ORDER BY e.position`,
+        [sessions[0].workoutId]
+      );
+      const { rows: logs } = await pool.query(
+        `SELECT id, exercise_id AS "exerciseId", set_number AS "setNumber",
+                reps, weight::float8 AS weight, completed, notes
+         FROM atlas_set_logs
+         WHERE session_id = $1
+         ORDER BY exercise_id, set_number`,
+        [req.params.id]
+      );
+      res.json({ ...sessions[0], exercises, logs });
+    } catch (error) { next(error); }
+  });
+
   app.get('/atlas-api/exercises', atlasRequireAuth, atlasRole('trainer'), async (req, res, next) => {
     try {
       const params = [req.atlasUser.id];
