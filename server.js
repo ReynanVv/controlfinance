@@ -1277,7 +1277,7 @@ app.get('/atlas-api/invitations/resolve/:token', asyncRoute(async (req, res) => 
   res.json(invitation);
 }));
 
-app.post('/atlas-api/invitations/accept-token', atlasRequireAuth, atlasRole('student'), asyncRoute(async (req, res) => {
+app.post('/atlas-api/invitations/accept-token', atlasRequireAuth, asyncRoute(async (req, res) => {
   const rawToken = String(req.body?.token || '').trim();
   if (!rawToken) return res.status(400).json({ error: 'Token de convite ausente.' });
 
@@ -1294,6 +1294,17 @@ app.post('/atlas-api/invitations/accept-token', atlasRequireAuth, atlasRole('stu
   if (invitation.expires_at && new Date(invitation.expires_at) < new Date()) {
     return res.status(410).json({ error: 'Este convite expirou. Solicite um novo link ao treinador.' });
   }
+
+  await pool.query(
+    `INSERT INTO atlas_user_profiles (id, user_id, profile)
+     VALUES ($1, $2, 'student')
+     ON CONFLICT (user_id, profile) DO NOTHING`,
+    [crypto.randomUUID(), req.atlasUser.id]
+  );
+  await pool.query(
+    'UPDATE atlas_sessions SET active_role = $2 WHERE token_hash = $1',
+    [req.atlasTokenHash, 'student']
+  );
 
   const alreadyLinked = await pool.query(
     'SELECT 1 FROM atlas_trainer_students WHERE trainer_id = $1 AND student_id = $2',
