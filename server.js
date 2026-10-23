@@ -478,6 +478,38 @@ app.put('/api/incomes/:id', asyncRoute(async (req, res) => {
   res.json(rows[0]);
 }));
 
+app.post('/api/incomes/:id/copy-next-month', asyncRoute(async (req, res) => {
+  const { rows } = await pool.query(`
+    SELECT id, month, name, amount::float8 AS amount, day, notes
+    FROM cf_incomes
+    WHERE id = $1 AND user_id = $2
+  `, [req.params.id, req.userId]);
+
+  const source = rows[0];
+  if (!source) return res.status(404).json({ error: 'Ganho não encontrado.' });
+
+  const [year, monthNumber] = source.month.split('-').map(Number);
+  const nextDate = new Date(Date.UTC(year, monthNumber, 1));
+  const targetMonth = `${nextDate.getUTCFullYear()}-${String(nextDate.getUTCMonth() + 1).padStart(2, '0')}`;
+  const newIncomeId = crypto.randomUUID();
+
+  const { rows: insertedRows } = await pool.query(`
+    INSERT INTO cf_incomes (id, user_id, month, name, amount, day, notes)
+    VALUES ($1, $2, $3, $4, $5, $6, $7)
+    RETURNING id, month, name, amount::float8 AS amount, day, notes
+  `, [
+    newIncomeId,
+    req.userId,
+    targetMonth,
+    source.name,
+    source.amount,
+    source.day,
+    source.notes,
+  ]);
+
+  res.status(201).json(insertedRows[0]);
+}));
+
 app.delete('/api/incomes/:id', asyncRoute(async (req, res) => {
   const result = await pool.query('DELETE FROM cf_incomes WHERE id = $1 AND user_id = $2', [req.params.id, req.userId]);
   if (!result.rowCount) return res.status(404).json({ error: 'Ganho não encontrado.' });
