@@ -152,6 +152,7 @@ function renderIncomes(incomes) {
           <div class="entry-value income">+ ${brl.format(item.amount)}</div>
           <div class="entry-actions">
             <button class="mini-btn" data-action="edit-income" data-id="${item.id}">Editar</button>
+            <button class="mini-btn copy-next-btn" data-action="copy-income-next" data-id="${item.id}">Copiar p/ próximo mês</button>
             <button class="mini-btn danger" data-action="delete-income" data-id="${item.id}">Excluir</button>
           </div>
         </div>
@@ -300,6 +301,24 @@ async function deleteItem(type, id) {
   }
 }
 
+async function copyIncomeToNextMonth(id) {
+  const income = state.data.incomes.find((item) => item.id === id);
+  if (!income) return;
+
+  const [year, month] = income.month.split('-').map(Number);
+  const nextDate = new Date(Date.UTC(year, month, 1));
+  const targetMonth = `${nextDate.getUTCFullYear()}-${String(nextDate.getUTCMonth() + 1).padStart(2, '0')}`;
+
+  if (!confirm(`Copiar "${income.name}" para ${formatMonth(targetMonth)}?`)) return;
+
+  try {
+    const result = await api(`/api/incomes/${id}/copy-next-month`, { method: 'POST' });
+    toast(`Copiado para ${formatMonth(result.month)}.`);
+  } catch (error) {
+    toast(error.message, true);
+  }
+}
+
 async function copyExpenseToNextMonth(id) {
   const expense = findExpense(id);
   if (!expense) return;
@@ -391,6 +410,7 @@ $('#incomeList').addEventListener('click', (event) => {
   if (!button) return;
   const item = state.data.incomes.find((row) => row.id === button.dataset.id);
   if (button.dataset.action === 'edit-income') openDialog('income', item);
+  if (button.dataset.action === 'copy-income-next') copyIncomeToNextMonth(button.dataset.id);
   if (button.dataset.action === 'delete-income') deleteItem('income', button.dataset.id);
 });
 
