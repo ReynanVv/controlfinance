@@ -204,7 +204,10 @@ function renderExpenses(expenses) {
           <span>Base ${brl.format(item.baseAmount)} + subgastos ${brl.format(item.subTotal)}</span>
           <strong>${brl.format(item.total)}</strong>
         </div>
-        <button class="mini-btn add-sub-btn" data-action="add-sub" data-id="${item.id}">+ Adicionar subgasto</button>
+        <div class="expense-copy-actions">
+          <button class="mini-btn add-sub-btn" data-action="add-sub" data-id="${item.id}">+ Adicionar subgasto</button>
+          <button class="mini-btn copy-next-btn" data-action="copy-next" data-id="${item.id}">Copiar p/ próximo mês</button>
+        </div>
       </div>
     </article>
   `).join('');
@@ -297,6 +300,29 @@ async function deleteItem(type, id) {
   }
 }
 
+async function copyExpenseToNextMonth(id) {
+  const expense = findExpense(id);
+  if (!expense) return;
+
+  const [year, month] = expense.month.split('-').map(Number);
+  const nextDate = new Date(Date.UTC(year, month, 1));
+  const targetMonth = `${nextDate.getUTCFullYear()}-${String(nextDate.getUTCMonth() + 1).padStart(2, '0')}`;
+  const targetLabel = formatMonth(targetMonth);
+
+  const includesSubs = expense.subexpenses?.length
+    ? ` e ${expense.subexpenses.length} subgasto${expense.subexpenses.length === 1 ? '' : 's'}`
+    : '';
+
+  if (!confirm(`Copiar "${expense.name}"${includesSubs} para ${targetLabel}?`)) return;
+
+  try {
+    const result = await api(`/api/expenses/${id}/copy-next-month`, { method: 'POST' });
+    toast(`Copiado para ${formatMonth(result.month)}.`);
+  } catch (error) {
+    toast(error.message, true);
+  }
+}
+
 function toast(message, error = false) {
   const el = $('#toast');
   el.textContent = message;
@@ -375,6 +401,7 @@ $('#expenseList').addEventListener('click', (event) => {
   if (action === 'edit-expense') openDialog('expense', findExpense(id));
   if (action === 'delete-expense') deleteItem('expense', id);
   if (action === 'add-sub') openDialog('subexpense', null, id);
+  if (action === 'copy-next') copyExpenseToNextMonth(id);
   if (action === 'edit-sub') openDialog('subexpense', findSub(id), parent);
   if (action === 'delete-sub') deleteItem('subexpense', id);
 });
