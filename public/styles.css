@@ -247,3 +247,23 @@ textarea { resize: vertical; }
   align-items: center;
   gap: 8px;
 }
+
+.expense-copy-actions {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  margin-top: 10px;
+}
+.expense-copy-actions .add-sub-btn,
+.expense-copy-actions .copy-next-btn {
+  margin-top: 0;
+  width: 100%;
+}
+.copy-next-btn {
+  color: var(--green);
+}
+@media (min-width: 520px) {
+  .expense-copy-actions {
+    grid-template-columns: 1fr 1fr;
+  }
+}
