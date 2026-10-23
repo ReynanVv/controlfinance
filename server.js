@@ -548,6 +548,76 @@ app.put('/api/expenses/:id', asyncRoute(async (req, res) => {
   });
 }));
 
+app.post('/api/expenses/:id/copy-next-month', asyncRoute(async (req, res) => {
+  const { rows: expenseRows } = await pool.query(`
+    SELECT id, month, name, base_amount::float8 AS "baseAmount", day, notes
+    FROM cf_expenses
+    WHERE id = $1 AND user_id = $2
+  `, [req.params.id, req.userId]);
+
+  const source = expenseRows[0];
+  if (!source) return res.status(404).json({ error: 'Gasto não encontrado.' });
+
+  const [year, monthNumber] = source.month.split('-').map(Number);
+  const nextDate = new Date(Date.UTC(year, monthNumber, 1));
+  const targetMonth = `${nextDate.getUTCFullYear()}-${String(nextDate.getUTCMonth() + 1).padStart(2, '0')}`;
+
+  const { rows: subRows } = await pool.query(`
+    SELECT name, amount::float8 AS amount, day, notes
+    FROM cf_subexpenses
+    WHERE expense_id = $1 AND user_id = $2
+    ORDER BY created_at
+  `, [source.id, req.userId]);
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const newExpenseId = crypto.randomUUID();
+    await client.query(`
+      INSERT INTO cf_expenses (id, user_id, month, name, base_amount, day, notes)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `, [
+      newExpenseId,
+      req.userId,
+      targetMonth,
+      source.name,
+      source.baseAmount,
+      source.day,
+      source.notes,
+    ]);
+
+    for (const sub of subRows) {
+      await client.query(`
+        INSERT INTO cf_subexpenses (id, user_id, expense_id, name, amount, day, notes)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `, [
+        crypto.randomUUID(),
+        req.userId,
+        newExpenseId,
+        sub.name,
+        sub.amount,
+        sub.day,
+        sub.notes,
+      ]);
+    }
+
+    await client.query('COMMIT');
+
+    res.status(201).json({
+      id: newExpenseId,
+      month: targetMonth,
+      name: source.name,
+      copiedSubexpenses: subRows.length,
+    });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}));
+
 app.delete('/api/expenses/:id', asyncRoute(async (req, res) => {
   const result = await pool.query('DELETE FROM cf_expenses WHERE id = $1 AND user_id = $2', [req.params.id, req.userId]);
   if (!result.rowCount) return res.status(404).json({ error: 'Gasto não encontrado.' });
