@@ -1,28 +1,32 @@
-# Control Finance
+# Atlas API
 
-Controle financeiro pessoal simples, sem categorias obrigatórias. Cada pessoa cria a própria conta e vê somente os próprios dados.
+Backend do Atlas preparado para ser separado do serviço do ControlFinance.
 
-## O que faz
+## Estado desta cópia
 
-- Cadastro e login por usuário + senha.
-- Sessão por cookie seguro com duração de 30 dias.
-- Dados separados por conta no PostgreSQL.
-- Ganhos e gastos livres, separados por mês.
-- Edição e exclusão a qualquer momento.
-- Subgastos dentro de um gasto: Santander R$ 300 + Spotify R$ 20 = Santander R$ 320.
-- Dia e observação opcionais.
-- Migração opcional dos dados salvos pela versão antiga em localStorage.
+Esta branch foi criada a partir de `feature/accounts` do repositório `controlfinance`, que contém o backend integrado atualmente usado pelo Atlas.
 
-## Deploy
+Para evitar qualquer risco na migração, o código do ControlFinance foi mantido nesta cópia. Nenhum arquivo foi removido do repositório original. Depois que o novo serviço `atlas-api` estiver validado no Render, o backend pode ser refatorado para conter somente as rotas do Atlas.
 
-O arquivo `render.yaml` liga o Web Service ao PostgreSQL `controlfinance-db` e gera `SESSION_SECRET` automaticamente.
+## Atlas
 
-Para desenvolvimento local:
+- API base: `/atlas-api`
+- Health check: `/atlas-api/health`
+- PostgreSQL: reutilize a mesma `DATABASE_URL` atual durante a migração para manter os dados e tabelas `atlas_*`.
+- Node.js: 20+
+
+## Variáveis de ambiente
 
 ```env
-DATABASE_URL=postgres://usuario:senha@localhost:5432/controlfinance
+DATABASE_URL=postgres://...
 SESSION_SECRET=uma-chave-grande
+ATLAS_DEMO_PASSWORD=senha-opcional-da-demo
 PORT=3000
+NODE_ENV=production
 ```
 
-Depois rode `npm install` e `npm run dev`.
+## Render
+
+Ao criar o novo Web Service, aponte para o futuro repositório `atlas-api`, use `npm install` no build e `npm start` no start. Configure o health check como `/atlas-api/health`.
+
+Durante a migração, não desligue nem altere o serviço atual do ControlFinance até confirmar que o frontend do Atlas está respondendo pelo novo endpoint.
