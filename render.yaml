@@ -1,24 +1,17 @@
 services:
   - type: web
-    name: controlfinance-app
+    name: atlas-api
     runtime: node
     plan: free
-    region: virginia
-    branch: feature/accounts
     buildCommand: npm install
     startCommand: npm start
-    healthCheckPath: /api/health
+    healthCheckPath: /atlas-api/health
     envVars:
       - key: NODE_ENV
         value: production
       - key: DATABASE_URL
-        fromDatabase:
-          name: controlfinance-db
-          property: connectionString
+        sync: false
       - key: SESSION_SECRET
         generateValue: true
-
-databases:
-  - name: controlfinance-db
-    plan: free
-    region: virginia
+      - key: ATLAS_DEMO_PASSWORD
+        sync: false
