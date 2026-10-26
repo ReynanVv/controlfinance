@@ -85,6 +85,23 @@ async function progressForStudent(pool, studentId, trainerId = null) {
     params
   );
 
+  const { rows: annotations } = await pool.query(
+    `SELECT sl.id, ws.id AS "sessionId", ws.completed_at AS "completedAt",
+            w.name AS "workoutName", e.name AS "exerciseName",
+            sl.set_number AS "setNumber", sl.notes
+     FROM atlas_set_logs sl
+     JOIN atlas_workout_sessions ws ON ws.id = sl.session_id
+     JOIN atlas_workouts w ON w.id = ws.workout_id
+     JOIN atlas_workout_exercises e ON e.id = sl.exercise_id
+     WHERE ws.student_id = $1
+       AND ws.completed_at IS NOT NULL
+       AND sl.completed = TRUE
+       AND BTRIM(COALESCE(sl.notes, '')) <> ''${trainerClause}
+     ORDER BY ws.completed_at DESC, e.position, sl.set_number
+     LIMIT 100`,
+    params
+  );
+
   const totalVolume = sessions.reduce((sum, item) => sum + Number(item.volume || 0), 0);
   const maxWeight = sessions.reduce((max, item) => Math.max(max, Number(item.maxWeight || 0)), 0);
   const last30Cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
@@ -101,6 +118,7 @@ async function progressForStudent(pool, studentId, trainerId = null) {
     },
     sessions,
     exercises,
+    annotations,
   };
 }
 
@@ -874,6 +892,116 @@ export function registerAtlasExtraRoutes({ app, pool, atlasRequireAuth, atlasRol
       res.status(201).json({
         id: workoutId, name, model, description, intensity,
         estimatedMinutes, scheduledTime, templateId, scheduledDays,
+      });
+    } catch (error) { next(error); }
+  });
+
+  app.post('/atlas-api/workouts/:id/copy', atlasRequireAuth, atlasRole('trainer'), async (req, res, next) => {
+    try {
+      const targetStudentId = String(req.body?.studentId || '').trim();
+      if (!targetStudentId) return res.status(400).json({ error: 'Selecione o aluno de destino.' });
+
+      const { rows: sourceRows } = await pool.query(
+        `SELECT *
+         FROM atlas_workouts
+         WHERE id = $1 AND trainer_id = $2`,
+        [req.params.id, req.atlasUser.id]
+      );
+      const source = sourceRows[0];
+      if (!source) return res.status(404).json({ error: 'Treino de origem não encontrado.' });
+      if (source.student_id === targetStudentId) {
+        return res.status(400).json({ error: 'Escolha um aluno diferente para exportar o treino.' });
+      }
+
+      const linked = await pool.query(
+        'SELECT 1 FROM atlas_trainer_students WHERE trainer_id = $1 AND student_id = $2',
+        [req.atlasUser.id, targetStudentId]
+      );
+      if (!linked.rowCount) return res.status(400).json({ error: 'O aluno de destino não está vinculado a você.' });
+
+      const availabilityResult = await pool.query(
+        'SELECT day_of_week FROM atlas_availability WHERE student_id = $1 ORDER BY day_of_week',
+        [targetStudentId]
+      );
+      const availability = availabilityResult.rows.map((item) => Number(item.day_of_week));
+      if (!availability.length) {
+        return res.status(400).json({ error: 'O aluno de destino ainda não informou a disponibilidade.' });
+      }
+
+      const scheduledDays = req.body?.scheduledDays
+        ? workoutDays(req.body.scheduledDays)
+        : (source.scheduled_days || []).map(Number);
+      if (!scheduledDays.length || scheduledDays.some((day) => !availability.includes(day))) {
+        return res.status(400).json({
+          error: 'Escolha somente dias disponíveis para o aluno de destino.',
+          availability,
+        });
+      }
+
+      const { rows: sourceExercises } = await pool.query(
+        `SELECT exercise_id, name, sets, reps, suggested_weight, rest_seconds,
+                notes, video_url, position
+         FROM atlas_workout_exercises
+         WHERE workout_id = $1
+         ORDER BY position`,
+        [source.id]
+      );
+      if (!sourceExercises.length) return res.status(400).json({ error: 'O treino de origem não possui exercícios.' });
+
+      const copiedWorkoutId = crypto.randomUUID();
+      const copiedName = cleanText(req.body?.name ?? source.name, 'Nome do treino', true, 120);
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query(
+          `INSERT INTO atlas_workouts
+            (id, trainer_id, student_id, name, model, description, intensity,
+             estimated_minutes, scheduled_time, template_id, notes, scheduled_days)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::smallint[])`,
+          [
+            copiedWorkoutId, req.atlasUser.id, targetStudentId, copiedName, source.model,
+            source.description || '', source.intensity || 'Moderada',
+            Number(source.estimated_minutes || 0), source.scheduled_time || '',
+            source.template_id || null, source.notes || '', scheduledDays,
+          ]
+        );
+
+        for (const exercise of sourceExercises) {
+          await client.query(
+            `INSERT INTO atlas_workout_exercises
+              (id, workout_id, exercise_id, name, sets, reps, suggested_weight,
+               rest_seconds, notes, video_url, position)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+            [
+              crypto.randomUUID(), copiedWorkoutId, exercise.exercise_id, exercise.name,
+              exercise.sets, exercise.reps, exercise.suggested_weight,
+              exercise.rest_seconds, exercise.notes || '', exercise.video_url || null,
+              exercise.position,
+            ]
+          );
+        }
+
+        await client.query(
+          `INSERT INTO atlas_notifications
+            (id, user_id, type, title, body, reference_id, occurrence_key)
+           VALUES ($1, $2, 'workout_prescribed', 'Novo treino prescrito', $3, $4, '')
+           ON CONFLICT (user_id, type, reference_id, occurrence_key) DO NOTHING`,
+          [crypto.randomUUID(), targetStudentId, copiedName, copiedWorkoutId]
+        );
+        await client.query('COMMIT');
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        client.release();
+      }
+
+      res.status(201).json({
+        id: copiedWorkoutId,
+        sourceWorkoutId: source.id,
+        studentId: targetStudentId,
+        name: copiedName,
+        scheduledDays,
       });
     } catch (error) { next(error); }
   });
