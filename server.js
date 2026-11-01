@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import express from 'express';
 import cookieParser from 'cookie-parser';
 import pg from 'pg';
+import { ensureWeddingSchema, registerWeddingRoutes } from './wedding-api.js';
 
 const { Pool } = pg;
 const app = express();
@@ -362,6 +363,8 @@ app.delete('/api/subexpenses/:id', asyncRoute(async (req, res) => {
   res.status(204).end();
 }));
 
+registerWeddingRoutes(app, pool);
+
 app.use((error, _req, res, _next) => {
   console.error(error);
   const isUserError = error instanceof Error && /inválid|obrigat|longo|Dia deve|Mês inválido/i.test(error.message);
@@ -369,6 +372,7 @@ app.use((error, _req, res, _next) => {
 });
 
 await ensureSchema();
+await ensureWeddingSchema(pool);
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`ControlFinance rodando na porta ${PORT}`);
 });

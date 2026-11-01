@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#090909" />
+  <title>Casamento | Control Finance</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="/casamento.css" />
+  <script src="/casamento.js" defer></script>
+</head>
+<body>
+  <main class="wedding-container">
+    <header class="wedding-header">
+      <a class="back-link" href="/">‹ Finanças</a>
+      <span class="wedding-tag">ÁREA INDEPENDENTE</span>
+    </header>
+    <section class="wedding-heading">
+      <p class="eyebrow">CONTROL FINANCE · 20 MAR 2027</p>
+      <h1>Nosso casamento <span>♡</span></h1>
+      <p>Um lugar separado para acompanhar cada fornecedor, parcela e pagamento, sem afetar seus gastos mensais.</p>
+    </section>
+
+    <section id="weddingLogin" class="login-card hidden">
+      <div class="brand-mark">CF</div>
+      <h2>Entrar para acompanhar</h2>
+      <p>Utilize a mesma senha configurada no Control Finance.</p>
+      <form id="weddingLoginForm">
+        <label>Senha <input id="weddingPassword" type="password" autocomplete="current-password" required /></label>
+        <p class="form-error" id="weddingLoginError"></p>
+        <button class="primary-btn" type="submit">Entrar</button>
+      </form>
+    </section>
+
+    <div id="weddingContent" class="hidden">
+      <section class="wedding-metrics">
+        <article class="wedding-metric"><span>Total contratado</span><strong id="weddingTotal">—</strong></article>
+        <article class="wedding-metric"><span>Já pago</span><strong class="green" id="weddingPaid">—</strong></article>
+        <article class="wedding-metric"><span>Falta pagar</span><strong class="gold" id="weddingDue">—</strong></article>
+      </section>
+      <section class="progress-panel">
+        <div class="progress-label"><strong>Progresso do casamento</strong><strong id="weddingPercent">0%</strong></div>
+        <div class="wedding-progress-track"><div id="weddingProgressFill"></div></div>
+        <p id="weddingProgressText"></p>
+      </section>
+      <section class="wedding-section">
+        <div class="wedding-section-heading"><div><span class="section-kicker">PLANEJAMENTO</span><h2>Parcelas até março</h2></div><span class="wedding-note">Quitação antes de 20/03/2027</span></div>
+        <p class="wedding-explainer">Bebidas e bolo incluem o atraso de outubro/2026, diluído no plano. Marque uma parcela como paga para atualizar o restante automaticamente.</p>
+        <div id="weddingSchedule" class="wedding-schedule"></div>
+      </section>
+      <section class="wedding-section">
+        <div class="wedding-section-heading"><div><span class="section-kicker">FORNECEDORES</span><h2>Todos os gastos</h2></div><button id="addWeddingSupplier" class="action-btn wedding-add" type="button">+ Adicionar</button></div>
+        <div id="weddingSuppliers" class="wedding-suppliers"></div>
+      </section>
+    </div>
+    <p class="wedding-loading" id="weddingLoading">Carregando os gastos do casamento…</p>
+    <p class="wedding-error hidden" id="weddingPageError" role="alert"></p>
+  </main>
+
+  <dialog id="weddingSupplierDialog" class="entry-dialog">
+    <form id="weddingSupplierForm">
+      <div class="dialog-head"><h2 id="weddingSupplierTitle">Fornecedor</h2><button type="button" class="icon-btn subtle" data-close="weddingSupplierDialog">×</button></div>
+      <input id="weddingSupplierId" type="hidden" />
+      <label>Fornecedor <input id="weddingSupplierName" maxlength="120" required placeholder="Ex.: Flores" /></label>
+      <label>Valor total contratado (R$) <input id="weddingSupplierTotal" inputmode="decimal" required placeholder="0,00" /></label>
+      <label>Já pago antes do acompanhamento (R$) <input id="weddingSupplierBaseline" inputmode="decimal" required placeholder="0,00" /></label>
+      <label>Observação (opcional) <textarea id="weddingSupplierNote" maxlength="500" rows="3"></textarea></label>
+      <p class="wedding-small">O saldo que faltar será dividido nas parcelas não pagas até março. Pagamentos marcados como pagos serão preservados.</p>
+      <p class="form-error" id="weddingSupplierError"></p>
+      <button class="primary-btn" type="submit">Salvar fornecedor</button>
+    </form>
+  </dialog>
+
+  <dialog id="weddingPaymentDialog" class="entry-dialog">
+    <form id="weddingPaymentForm">
+      <div class="dialog-head"><h2>Registrar pagamento</h2><button type="button" class="icon-btn subtle" data-close="weddingPaymentDialog">×</button></div>
+      <input id="weddingInstallmentId" type="hidden" />
+      <p id="weddingPaymentDescription" class="wedding-small"></p>
+      <label>Valor pago (R$) <input id="weddingPaymentAmount" inputmode="decimal" required /></label>
+      <label>Data do pagamento <input id="weddingPaymentDate" type="date" required /></label>
+      <p class="wedding-small">Se pagar um valor diferente do previsto, o saldo será repartido entre as parcelas restantes.</p>
+      <p class="form-error" id="weddingPaymentError"></p>
+      <button class="primary-btn" type="submit">Confirmar pagamento</button>
+    </form>
+  </dialog>
+
+  <div id="weddingToast" class="toast" role="status" aria-live="polite"></div>
+</body>
+</html>
