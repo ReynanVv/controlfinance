@@ -5,6 +5,7 @@ import express from 'express';
 import cookieParser from 'cookie-parser';
 import pg from 'pg';
 import { ensureAtlasExtraSchema, registerAtlasExtraRoutes } from './atlas-extra.js';
+import { ensureWeddingSchema, registerWeddingRoutes } from './wedding-accounts.js';
 
 const { Pool } = pg;
 const scryptAsync = promisify(crypto.scrypt);
@@ -1981,6 +1982,8 @@ app.post('/atlas-demo/reset', asyncRoute(async (_req, res) => {
   }
 }));
 
+registerWeddingRoutes(app, pool);
+
 app.get('*', (_req, res) => {
   res.sendFile(new URL('./public/index.html', import.meta.url).pathname);
 });
@@ -2000,6 +2003,7 @@ app.listen(PORT, '0.0.0.0', () => {
     await ensureSchema();
     await ensureAtlasSchema();
     await ensureAtlasExtraSchema(pool);
+    await ensureWeddingSchema(pool);
     console.log('Schemas ControlFinance/Atlas verificados.');
   } catch (error) {
     console.error('Falha ao verificar schemas:', error);
