@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 
 const MONTHS = ['2026-11','2026-12','2027-01','2027-02','2027-03'];
 const INITIAL = [
-  ["Pomme d'Or",2035220,1193060,"Entrada de R$ 3.509,00 e 6 de 12 parcelas pagas."],
+  ["Pomme d'Or",2035220,1193060,"Entrada de R$ 3.509,00 paga; 6 de 12 parcelas pagas. Restam 6 parcelas de R$ 1.403,60, duas em novembro e uma por mês até março."],
   ['Fotos',449500,262250,'Pré-casamento pago e 5 de 10 parcelas pagas.'],
   ['Bebidas',428000,257750,'Uma parcela de outubro/2026 atrasada; saldo redistribuído até março.'],
   ['Bolo',350000,275000,'Uma parcela de outubro/2026 atrasada; saldo redistribuído até março.'],
@@ -105,6 +105,46 @@ export async function ensureWeddingSchema(pool) {
     'CREATE INDEX IF NOT EXISTS idx_cf_wedding_suppliers_user ON cf_wedding_suppliers(user_id);',
     'CREATE INDEX IF NOT EXISTS idx_cf_wedding_installments_user_supplier ON cf_wedding_installments(user_id,supplier_id);'
   ].join('\n'));
+
+  // Repair untouched Pomme d'Or plans imported by the previous version.
+  // Only the original five unpaid R$ 1.684,32 installments qualify;
+  // never overwrite edited amounts or recorded payments.
+  await tx(pool,async client=>{
+    const result=await client.query(`
+      SELECT s.id,s.user_id
+      FROM cf_wedding_suppliers s
+      JOIN cf_wedding_seeds seed ON seed.user_id=s.user_id
+      JOIN cf_wedding_installments p ON p.supplier_id=s.id AND p.user_id=s.user_id
+      WHERE s.name='Pomme d''Or' AND s.total_cents=2035220 AND s.baseline_paid_cents=1193060
+      GROUP BY s.id,s.user_id
+      HAVING COUNT(*)=5
+        AND BOOL_AND(p.paid=FALSE AND p.amount_cents=168432)
+        AND ARRAY_AGG(p.month ORDER BY p.month) = ARRAY['2026-11','2026-12','2027-01','2027-02','2027-03']
+    `);
+    for(const row of result.rows) {
+      await client.query('SELECT id FROM cf_wedding_suppliers WHERE id=$1 AND user_id=$2 FOR UPDATE',[row.id,row.user_id]);
+      const current=await client.query(
+        'SELECT month,amount_cents,paid FROM cf_wedding_installments WHERE supplier_id=$1 AND user_id=$2 ORDER BY month FOR UPDATE',
+        [row.id,row.user_id]
+      );
+      if(current.rows.length!==5 ||
+        current.rows.some((part,i)=>part.month!==MONTHS[i] || part.paid || Number(part.amount_cents)!==168432)) continue;
+      await client.query(
+        'UPDATE cf_wedding_installments SET amount_cents=140360 WHERE supplier_id=$1 AND user_id=$2 AND paid=FALSE',
+        [row.id,row.user_id]
+      );
+      await client.query(
+        'INSERT INTO cf_wedding_installments(id,user_id,supplier_id,month,amount_cents) VALUES($1,$2,$3,$4,$5)',
+        [crypto.randomUUID(),row.user_id,row.id,'2026-11',140360]
+      );
+      await client.query(
+        `UPDATE cf_wedding_suppliers SET note=$3 WHERE id=$1 AND user_id=$2
+           AND note='Entrada de R$ 3.509,00 e 6 de 12 parcelas pagas.'`,
+        [row.id,row.user_id,INITIAL[0][3]]
+      );
+    }
+  });
+
 }
 
 export function registerWeddingRoutes(app,pool) {
@@ -152,8 +192,11 @@ export function registerWeddingRoutes(app,pool) {
         );
         const due=total-baseline;
         if(!due) continue;
-        const each=Math.floor(due/MONTHS.length),remainder=due%MONTHS.length;
-        for(const [m,month] of MONTHS.entries()){
+        // Pomme d'Or: preserve the contractual installment of R$ 1.403,60.
+        // Six pending installments over five months: two in November.
+        const schedule=i===0 ? [MONTHS[0],...MONTHS] : MONTHS;
+        const each=Math.floor(due/schedule.length),remainder=due%schedule.length;
+        for(const [m,month] of schedule.entries()){
           await client.query(
             'INSERT INTO cf_wedding_installments(id,user_id,supplier_id,month,amount_cents) VALUES($1,$2,$3,$4,$5)',
             [crypto.randomUUID(),req.userId,supplierId,month,each+(m<remainder?1:0)]

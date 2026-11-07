@@ -90,6 +90,9 @@ function renderSchedule() {
     const settled = rows.filter((row) => row.paid).reduce((sum, row) => sum + row.amountCents, 0);
     const content = rows.length ? rows.map((row) =>
       '<div class="wedding-payment-row"><div><div class="wedding-payment-name">' + clean(row.supplier.name) +
+      (row.supplier.name === "Pomme d'Or" && row.supplier.totalCents === 2035220 &&
+       row.supplier.installments.length === 6
+        ? ' · ' + String(row.supplier.installments.findIndex((p) => p.id === row.id) + 7) + '/12' : '') +
       '</div><div class="wedding-payment-meta">' + (row.paid ? 'Pago em ' + clean(row.paidOn || '—') :
       (row.month < currentMonth() ? 'Em atraso' : 'Previsto')) +
       '</div></div><div class="wedding-payment-right"><strong>' + fmt(row.amountCents) +
