@@ -119,7 +119,7 @@ export async function ensureWeddingSchema(pool) {
       GROUP BY s.id,s.user_id
       HAVING COUNT(*)=5
         AND BOOL_AND(p.paid=FALSE AND p.amount_cents=168432)
-        AND ARRAY_AGG(p.month ORDER BY p.month) = ARRAY['2026-11','2026-12','2027-01','2027-02','2027-03']
+        AND ARRAY_AGG(p.month::text ORDER BY p.month) = ARRAY['2026-11','2026-12','2027-01','2027-02','2027-03']
     `);
     for(const row of result.rows) {
       await client.query('SELECT id FROM cf_wedding_suppliers WHERE id=$1 AND user_id=$2 FOR UPDATE',[row.id,row.user_id]);
