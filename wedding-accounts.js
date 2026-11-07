@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 
 const MONTHS = ['2026-11','2026-12','2027-01','2027-02','2027-03'];
 const INITIAL = [
-  ["Pomme d'Or",2035220,1193060,"Entrada de R$ 3.509,00 paga; 6 de 12 parcelas pagas. Restam 6 parcelas de R$ 1.403,60, duas em novembro e uma por mês até março."],
+  ["Pomme d'Or",1754500,1193060,"Entrada de R$ 3.509,00 paga. 6 de 10 parcelas de R$ 1.403,60 pagas. Restam 4 parcelas de R$ 1.403,60, com vencimento dia 20 de novembro/2026 a fevereiro/2027. Sem parcelas atrasadas."],
   ['Fotos',449500,262250,'Pré-casamento pago e 5 de 10 parcelas pagas.'],
   ['Bebidas',428000,257750,'Uma parcela de outubro/2026 atrasada; saldo redistribuído até março.'],
   ['Bolo',350000,275000,'Restam 3 parcelas de R$ 250,00 (5/7, 6/7 e 7/7), previstas para novembro, dezembro e janeiro. Parcela de outubro/2026 atrasada.'],
@@ -106,45 +106,66 @@ export async function ensureWeddingSchema(pool) {
     'CREATE INDEX IF NOT EXISTS idx_cf_wedding_installments_user_supplier ON cf_wedding_installments(user_id,supplier_id);'
   ].join('\n'));
 
-  // Repair untouched Pomme d'Or plans imported by the previous version.
-  // Only the original five unpaid R$ 1.684,32 installments qualify;
-  // never overwrite edited amounts or recorded payments.
+
+  // Correct only seeded Pomme d'Or schedules from the two previous revisions.
+  // Preserve recorded payments and manual adjustments. Do not modify other vendors.
   await tx(pool,async client=>{
-    const result=await client.query(`
+    const candidates=await client.query(`
       SELECT s.id,s.user_id
       FROM cf_wedding_suppliers s
       JOIN cf_wedding_seeds seed ON seed.user_id=s.user_id
-      JOIN cf_wedding_installments p ON p.supplier_id=s.id AND p.user_id=s.user_id
-      WHERE s.name='Pomme d''Or' AND s.total_cents=2035220 AND s.baseline_paid_cents=1193060
-      GROUP BY s.id,s.user_id
-      HAVING COUNT(*)=5
-        AND BOOL_AND(p.paid=FALSE AND p.amount_cents=168432)
-        AND ARRAY_AGG(p.month::text ORDER BY p.month) = ARRAY['2026-11','2026-12','2027-01','2027-02','2027-03']
+      WHERE s.name='Pomme d''Or'
+        AND s.total_cents=2035220 AND s.baseline_paid_cents=1193060
     `);
-    for(const row of result.rows) {
-      await client.query('SELECT id FROM cf_wedding_suppliers WHERE id=$1 AND user_id=$2 FOR UPDATE',[row.id,row.user_id]);
+    const oldFiveMonths=MONTHS;
+    const oldSixMonths=[MONTHS[0],...MONTHS];
+    for(const item of candidates.rows) {
+      await client.query(
+        'SELECT id FROM cf_wedding_suppliers WHERE id=$1 AND user_id=$2 FOR UPDATE',
+        [item.id,item.user_id]
+      );
       const current=await client.query(
-        'SELECT month,amount_cents,paid FROM cf_wedding_installments WHERE supplier_id=$1 AND user_id=$2 ORDER BY month FOR UPDATE',
-        [row.id,row.user_id]
+        'SELECT id,month,amount_cents,paid FROM cf_wedding_installments WHERE supplier_id=$1 AND user_id=$2 ORDER BY month,created_at,id FOR UPDATE',
+        [item.id,item.user_id]
       );
-      if(current.rows.length!==5 ||
-        current.rows.some((part,i)=>part.month!==MONTHS[i] || part.paid || Number(part.amount_cents)!==168432)) continue;
-      await client.query(
-        'UPDATE cf_wedding_installments SET amount_cents=140360 WHERE supplier_id=$1 AND user_id=$2 AND paid=FALSE',
-        [row.id,row.user_id]
-      );
-      await client.query(
-        'INSERT INTO cf_wedding_installments(id,user_id,supplier_id,month,amount_cents) VALUES($1,$2,$3,$4,$5)',
-        [crypto.randomUUID(),row.user_id,row.id,'2026-11',140360]
-      );
-      await client.query(
-        `UPDATE cf_wedding_suppliers SET note=$3 WHERE id=$1 AND user_id=$2
-           AND note='Entrada de R$ 3.509,00 e 6 de 12 parcelas pagas.'`,
-        [row.id,row.user_id,INITIAL[0][3]]
-      );
+      const rows=current.rows;
+      const matches=(expectedMonths,amount)=>rows.length===expectedMonths.length &&
+        rows.every((p,i)=>p.month===expectedMonths[i] && Number(p.amount_cents)===amount);
+      const oldFive=matches(oldFiveMonths,168432) && rows.every(p=>!p.paid);
+      // A six-row plan may have paid rows: preserve payments, as long as both
+      // the extra November installment and March installment are unpaid.
+      const oldSix=matches(oldSixMonths,140360) &&
+        !rows[5].paid && rows.slice(0,2).some(p=>!p.paid);
+      if(!oldFive && !oldSix) continue;
+
+      if(oldFive) {
+        for(const p of rows.slice(0,4)) {
+          await client.query('UPDATE cf_wedding_installments SET amount_cents=140360 WHERE id=$1 AND user_id=$2',
+            [p.id,item.user_id]);
+        }
+        await client.query('DELETE FROM cf_wedding_installments WHERE id=$1 AND user_id=$2',
+          [rows[4].id,item.user_id]);
+      } else {
+        const duplicate=rows.slice(0,2).find(p=>!p.paid);
+        await client.query('DELETE FROM cf_wedding_installments WHERE id=$1 AND user_id=$2',
+          [duplicate.id,item.user_id]);
+        await client.query('DELETE FROM cf_wedding_installments WHERE id=$1 AND user_id=$2',
+          [rows[5].id,item.user_id]);
+      }
+      await client.query(`
+        UPDATE cf_wedding_suppliers
+        SET total_cents=1754500,
+            note=CASE
+              WHEN note IN (
+                'Entrada de R$ 3.509,00 e 6 de 12 parcelas pagas.',
+                'Entrada de R$ 3.509,00 paga; 6 de 12 parcelas pagas. Restam 6 parcelas de R$ 1.403,60, duas em novembro e uma por mês até março.'
+              ) THEN $3
+              ELSE note
+            END
+        WHERE id=$1 AND user_id=$2
+      `,[item.id,item.user_id,INITIAL[0][3]]);
     }
   });
-
 
   // Repair only untouched legacy Bolo schedules (five R$ 150,00 installments).
   // Preserve all already paid or manually edited plans.
@@ -234,9 +255,9 @@ export function registerWeddingRoutes(app,pool) {
         );
         const due=total-baseline;
         if(!due) continue;
-        // Pomme d'Or: preserve the contractual installment of R$ 1.403,60.
-        // Six pending installments over five months: two in November.
-        const schedule=i===0 ? [MONTHS[0],...MONTHS] : (i===3 ? MONTHS.slice(0,3) : MONTHS);
+        // Pomme d'Or: four contractual installments, November through February.
+        // Bolo: three installments of R$ 250, November through January.
+        const schedule=i===0 ? MONTHS.slice(0,4) : (i===3 ? MONTHS.slice(0,3) : MONTHS);
         const each=Math.floor(due/schedule.length),remainder=due%schedule.length;
         for(const [m,month] of schedule.entries()){
           await client.query(
