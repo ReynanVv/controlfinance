@@ -45,8 +45,11 @@
         <p id="weddingProgressText"></p>
       </section>
       <section class="wedding-section">
-        <div class="wedding-section-heading"><div><span class="section-kicker">PLANEJAMENTO</span><h2>Parcelas até março</h2></div><span class="wedding-note">Quitação antes de 20/03/2027</span></div>
-        <p class="wedding-explainer">Bebidas e bolo incluem o atraso de outubro/2026, diluído no plano. Marque uma parcela como paga para atualizar o restante automaticamente.</p>
+        <div class="wedding-section-heading">
+          <div><span class="section-kicker">PLANEJAMENTO</span><h2>Parcelas e pagamentos</h2></div>
+          <button id="addWeddingPlanExpense" class="action-btn wedding-add" type="button">+ Novo gasto</button>
+        </div>
+        <p class="wedding-explainer">O planejamento é totalmente editável: defina os meses, valores e quais parcelas já foram pagas. Você também pode alterar tudo depois em “Editar plano”.</p>
         <div id="weddingSchedule" class="wedding-schedule"></div>
       </section>
       <section class="wedding-section">
@@ -66,7 +69,20 @@
       <label>Valor total contratado (R$) <input id="weddingSupplierTotal" inputmode="decimal" required placeholder="0,00" /></label>
       <label>Já pago antes do acompanhamento (R$) <input id="weddingSupplierBaseline" inputmode="decimal" required placeholder="0,00" /></label>
       <label>Observação (opcional) <textarea id="weddingSupplierNote" maxlength="500" rows="3"></textarea></label>
-      <p class="wedding-small">O saldo que faltar será dividido nas parcelas não pagas até março. Pagamentos marcados como pagos serão preservados.</p>
+
+      <section class="wedding-plan-editor">
+        <div class="wedding-plan-editor-head">
+          <div>
+            <strong>Parcelas</strong>
+            <p>Adicione quantas quiser e defina mês, valor e status de pagamento.</p>
+          </div>
+          <button id="addWeddingInstallment" class="mini-btn" type="button">+ Parcela</button>
+        </div>
+        <div id="weddingInstallmentEditor" class="wedding-installment-editor"></div>
+        <div id="weddingPlanSummary" class="wedding-plan-summary"></div>
+      </section>
+
+      <p class="wedding-small">“Já pago antes do acompanhamento” serve para entradas ou pagamentos antigos que você não quer listar como parcela. Parcelas marcadas como pagas também entram no total pago.</p>
       <p class="form-error" id="weddingSupplierError"></p>
       <button class="primary-btn" type="submit">Salvar fornecedor</button>
     </form>
@@ -79,7 +95,7 @@
       <p id="weddingPaymentDescription" class="wedding-small"></p>
       <label>Valor pago (R$) <input id="weddingPaymentAmount" inputmode="decimal" required /></label>
       <label>Data do pagamento <input id="weddingPaymentDate" type="date" required /></label>
-      <p class="wedding-small">Se pagar um valor diferente do previsto, o saldo será repartido entre as parcelas restantes.</p>
+      <p class="wedding-small">Você pode registrar um valor diferente do previsto. As outras parcelas permanecerão como foram definidas no plano.</p>
       <p class="form-error" id="weddingPaymentError"></p>
       <button class="primary-btn" type="submit">Confirmar pagamento</button>
     </form>
