@@ -30,6 +30,39 @@ function fields(body) {
   if (baseline>total) invalid('O valor pago não pode superar o total.');
   return {name,note,total,baseline};
 }
+
+function installmentPlan(body,total,baseline) {
+  if (!Array.isArray(body?.installments)) return null;
+  if (body.installments.length>120) invalid('Quantidade de parcelas muito grande.');
+
+  const plan=body.installments.map((item,index)=>{
+    const month=String(item?.month??'').trim();
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) invalid('Mês inválido na parcela '+(index+1)+'.');
+    const amount=cents(item?.amountCents,'Valor da parcela '+(index+1));
+    if (!amount) invalid('A parcela '+(index+1)+' precisa ter valor maior que zero.');
+    const paid=Boolean(item?.paid);
+    const paidOn=paid ? String(item?.paidOn??'').trim() : null;
+    if (paid && !/^\d{4}-\d{2}-\d{2}$/.test(paidOn)) invalid('Data de pagamento inválida na parcela '+(index+1)+'.');
+    return {month,amount,paid,paidOn};
+  });
+
+  const scheduled=plan.reduce((sum,item)=>sum+item.amount,0);
+  if (baseline+scheduled>total) invalid('A soma do valor já pago e das parcelas não pode superar o total contratado.');
+  return plan;
+}
+
+async function replaceInstallmentPlan(client,userId,supplierId,plan) {
+  await client.query(
+    'DELETE FROM cf_wedding_installments WHERE supplier_id=$1 AND user_id=$2',
+    [supplierId,userId]
+  );
+  for (const part of plan) {
+    await client.query(
+      'INSERT INTO cf_wedding_installments(id,user_id,supplier_id,month,amount_cents,paid,paid_on) VALUES($1,$2,$3,$4,$5,$6,$7)',
+      [crypto.randomUUID(),userId,supplierId,part.month,part.amount,part.paid,part.paidOn]
+    );
+  }
+}
 async function tx(pool, fn) {
   const client=await pool.connect();
   try {
@@ -229,10 +262,13 @@ export function registerWeddingRoutes(app,pool) {
       suppliers:supResult.rows.map(s=>{
         const installments=bySupplier.get(s.id)||[];
         const paidCents=Number(s.baseline_paid_cents)+installments.filter(p=>p.paid).reduce((sum,p)=>sum+p.amountCents,0);
+        const scheduledCents=installments.reduce((sum,p)=>sum+p.amountCents,0);
+        const unplannedCents=Math.max(0,Number(s.total_cents)-Number(s.baseline_paid_cents)-scheduledCents);
         return {
           id:s.id,name:s.name,note:s.note,totalCents:Number(s.total_cents),
           baselinePaidCents:Number(s.baseline_paid_cents),
-          paidCents,remainingCents:Number(s.total_cents)-paidCents,installments
+          paidCents,remainingCents:Number(s.total_cents)-paidCents,
+          scheduledCents,unplannedCents,installments
         };
       })
     });
@@ -272,12 +308,16 @@ export function registerWeddingRoutes(app,pool) {
   }));
 
   app.post('/api/wedding/suppliers',route(async(req,res)=>{
-    const p=fields(req.body), id=crypto.randomUUID();
+    const p=fields(req.body), plan=installmentPlan(req.body,p.total,p.baseline), id=crypto.randomUUID();
     await tx(pool,async client=>{
       await client.query(
         'INSERT INTO cf_wedding_suppliers(id,user_id,name,note,total_cents,baseline_paid_cents) VALUES($1,$2,$3,$4,$5,$6)',
         [id,req.userId,p.name,p.note,p.total,p.baseline]
       );
+      if(plan!==null) {
+        await replaceInstallmentPlan(client,req.userId,id,plan);
+        return;
+      }
       if(p.total===p.baseline) return;
       for(const month of validMonth()) await client.query(
         'INSERT INTO cf_wedding_installments(id,user_id,supplier_id,month,amount_cents) VALUES($1,$2,$3,$4,0)',
@@ -289,13 +329,17 @@ export function registerWeddingRoutes(app,pool) {
   }));
 
   app.put('/api/wedding/suppliers/:id',route(async(req,res)=>{
-    const p=fields(req.body);
+    const p=fields(req.body), plan=installmentPlan(req.body,p.total,p.baseline);
     await tx(pool,async client=>{
       const updated=await client.query(
         'UPDATE cf_wedding_suppliers SET name=$3,note=$4,total_cents=$5,baseline_paid_cents=$6 WHERE id=$1 AND user_id=$2 RETURNING id',
         [req.params.id,req.userId,p.name,p.note,p.total,p.baseline]
       );
       if(!updated.rowCount) invalid('Fornecedor não encontrado.');
+      if(plan!==null) {
+        await replaceInstallmentPlan(client,req.userId,req.params.id,plan);
+        return;
+      }
       await rebalance(client,req.userId,req.params.id);
     });
     res.json({ok:true});
@@ -324,7 +368,6 @@ export function registerWeddingRoutes(app,pool) {
         'UPDATE cf_wedding_installments SET paid=$3,amount_cents=COALESCE($4,amount_cents),paid_on=$5 WHERE id=$1 AND user_id=$2',
         [req.params.id,req.userId,req.body.paid,amount,date]
       );
-      await rebalance(client,req.userId,supplierId);
     });
     res.json({ok:true});
   }));
