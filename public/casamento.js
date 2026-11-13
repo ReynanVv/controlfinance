@@ -1,6 +1,6 @@
 const w = (id) => document.getElementById(id);
 const currency = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
-const months = ['2026-11', '2026-12', '2027-01', '2027-02', '2027-03'];
+const DEFAULT_MONTHS = ['2026-11', '2026-12', '2027-01', '2027-02', '2027-03'];
 const state = { suppliers: [] };
 const fmt = (cents) => currency.format(cents / 100);
 const inputMoney = (cents) => (cents / 100).toFixed(2).replace('.', ',');
@@ -82,8 +82,16 @@ function render() {
   renderSchedule();
   renderSuppliers();
 }
+function scheduleMonths() {
+  const found = new Set();
+  for (const supplier of state.suppliers) {
+    for (const installment of supplier.installments) found.add(installment.month);
+  }
+  const sorted = [...found].sort();
+  return sorted.length ? sorted : DEFAULT_MONTHS;
+}
 function renderSchedule() {
-  w('weddingSchedule').innerHTML = months.map((month) => {
+  w('weddingSchedule').innerHTML = scheduleMonths().map((month) => {
     const rows = state.suppliers.flatMap((supplier) => supplier.installments
       .filter((part) => part.month === month).map((part) => ({ ...part, supplier })));
     const due = rows.filter((row) => !row.paid).reduce((sum, row) => sum + row.amountCents, 0);
@@ -97,9 +105,11 @@ function renderSchedule() {
       (row.month < currentMonth() ? 'Em atraso' : 'Previsto')) +
       (row.supplier.name === "Pomme d'Or" && row.supplier.totalCents === 1754500 ? ' · vencimento dia 20' : '') +
       '</div></div><div class="wedding-payment-right"><strong>' + fmt(row.amountCents) +
-      '</strong><button type="button" class="wedding-mini ' + (row.paid ? 'paid' : '') + '" data-action="' +
+      '</strong><div class="wedding-payment-buttons">' +
+      '<button type="button" class="wedding-mini secondary" data-action="edit-plan" data-id="' + clean(row.supplier.id) + '">Editar plano</button>' +
+      '<button type="button" class="wedding-mini ' + (row.paid ? 'paid' : '') + '" data-action="' +
       (row.paid ? 'undo' : 'pay') + '" data-id="' + clean(row.id) + '">' +
-      (row.paid ? '✓ Pago · desfazer' : 'Marcar pago') + '</button></div></div>'
+      (row.paid ? '✓ Pago · desfazer' : 'Marcar pago') + '</button></div></div></div>'
     ).join('') : '<div class="wedding-payment-row wedding-payment-meta">Sem parcelas neste mês.</div>';
     return '<article class="wedding-month"><div class="wedding-month-head"><div><h3>' + monthName(month) +
       '</h3><small>Pago: ' + fmt(settled) + '</small></div><span>Falta ' + fmt(due) + '</span></div>' +
@@ -116,8 +126,9 @@ function renderSuppliers() {
       '</strong></div><div><span>Pago</span><strong class="green">' + fmt(s.paidCents) +
       '</strong></div><div><span>Restante</span><strong class="gold">' + fmt(s.remainingCents) +
       '</strong></div></div>' + (s.note ? '<div class="wedding-vendor-note">' + clean(s.note) + '</div>' : '') +
+      (s.unplannedCents ? '<div class="wedding-unplanned">Ainda sem parcela definida: <strong>' + fmt(s.unplannedCents) + '</strong></div>' : '') +
       '<div class="wedding-vendor-actions"><button type="button" class="mini-btn" data-action="edit" data-id="' +
-      clean(s.id) + '">Editar</button><button type="button" class="mini-btn danger" data-action="delete" data-id="' +
+      clean(s.id) + '">Editar plano</button><button type="button" class="mini-btn danger" data-action="delete" data-id="' +
       clean(s.id) + '">Excluir</button></div></article>';
   }).join('') : '<div class="empty-state">Nenhum fornecedor cadastrado.</div>';
 }
@@ -129,14 +140,85 @@ function installmentById(id) {
   }
   return null;
 }
+function planRow(part = {}) {
+  const row = document.createElement('div');
+  row.className = 'wedding-plan-row';
+  row.innerHTML =
+    '<label>Mês<input type="month" data-plan-month required></label>' +
+    '<label>Valor (R$)<input inputmode="decimal" data-plan-amount required placeholder="0,00"></label>' +
+    '<label class="wedding-paid-check"><span>Já paga</span><input type="checkbox" data-plan-paid></label>' +
+    '<label class="wedding-paid-date hidden">Data do pagamento<input type="date" data-plan-paid-on></label>' +
+    '<button class="mini-btn danger wedding-remove-part" type="button" data-remove-part>Remover</button>';
+
+  const monthInput = row.querySelector('[data-plan-month]');
+  const amountInput = row.querySelector('[data-plan-amount]');
+  const paidInput = row.querySelector('[data-plan-paid]');
+  const paidDateWrap = row.querySelector('.wedding-paid-date');
+  const paidOnInput = row.querySelector('[data-plan-paid-on]');
+
+  monthInput.value = part.month || currentMonth();
+  amountInput.value = Number.isFinite(part.amountCents) ? inputMoney(part.amountCents) : '';
+  paidInput.checked = Boolean(part.paid);
+  paidOnInput.value = part.paidOn || (part.paid ? dateToday() : '');
+  paidDateWrap.classList.toggle('hidden', !paidInput.checked);
+
+  paidInput.addEventListener('change', () => {
+    paidDateWrap.classList.toggle('hidden', !paidInput.checked);
+    if (paidInput.checked && !paidOnInput.value) paidOnInput.value = dateToday();
+  });
+
+  row.querySelector('[data-remove-part]').addEventListener('click', () => {
+    row.remove();
+    updatePlanSummary();
+  });
+  row.querySelectorAll('input').forEach((input) => input.addEventListener('input', updatePlanSummary));
+  return row;
+}
+function addPlanRow(part) {
+  w('weddingInstallmentEditor').appendChild(planRow(part));
+  updatePlanSummary();
+}
+function collectPlan() {
+  return [...w('weddingInstallmentEditor').querySelectorAll('.wedding-plan-row')].map((row, index) => {
+    const paid = row.querySelector('[data-plan-paid]').checked;
+    const paidOn = row.querySelector('[data-plan-paid-on]').value;
+    if (paid && !paidOn) throw new Error('Informe a data de pagamento da parcela ' + (index + 1) + '.');
+    return {
+      month: row.querySelector('[data-plan-month]').value,
+      amountCents: toCents(row.querySelector('[data-plan-amount]').value),
+      paid,
+      paidOn: paid ? paidOn : null,
+    };
+  });
+}
+function updatePlanSummary() {
+  let total = 0;
+  try {
+    total = [...w('weddingInstallmentEditor').querySelectorAll('[data-plan-amount]')]
+      .reduce((sum, input) => sum + (input.value.trim() ? toCents(input.value) : 0), 0);
+  } catch {}
+  let baseline = 0;
+  let contract = 0;
+  try { baseline = w('weddingSupplierBaseline').value.trim() ? toCents(w('weddingSupplierBaseline').value) : 0; } catch {}
+  try { contract = w('weddingSupplierTotal').value.trim() ? toCents(w('weddingSupplierTotal').value) : 0; } catch {}
+  const distributed = baseline + total;
+  const left = Math.max(0, contract - distributed);
+  w('weddingPlanSummary').innerHTML =
+    '<span>Parcelas: <strong>' + fmt(total) + '</strong></span>' +
+    '<span>Pago anterior: <strong>' + fmt(baseline) + '</strong></span>' +
+    '<span class="' + (left ? 'gold' : 'green') + '">Sem distribuir: <strong>' + fmt(left) + '</strong></span>';
+}
 function supplierDialog(item) {
-  w('weddingSupplierTitle').textContent = item ? 'Editar fornecedor' : 'Novo fornecedor';
+  w('weddingSupplierTitle').textContent = item ? 'Editar gasto e parcelas' : 'Novo gasto e parcelas';
   w('weddingSupplierId').value = item?.id || '';
   w('weddingSupplierName').value = item?.name || '';
   w('weddingSupplierTotal').value = item ? inputMoney(item.totalCents) : '';
   w('weddingSupplierBaseline').value = item ? inputMoney(item.baselinePaidCents) : '0,00';
   w('weddingSupplierNote').value = item?.note || '';
   w('weddingSupplierError').textContent = '';
+  w('weddingInstallmentEditor').innerHTML = '';
+  for (const installment of item?.installments || []) addPlanRow(installment);
+  updatePlanSummary();
   w('weddingSupplierDialog').showModal();
 }
 function paymentDialog(id) {
@@ -156,11 +238,17 @@ async function saveSupplier(event) {
     const totalCents = toCents(w('weddingSupplierTotal').value);
     const baselinePaidCents = toCents(w('weddingSupplierBaseline').value);
     if (baselinePaidCents > totalCents) throw new Error('O valor já pago é maior que o total.');
+    const installments = collectPlan();
+    const scheduledCents = installments.reduce((sum, part) => sum + part.amountCents, 0);
+    if (baselinePaidCents + scheduledCents > totalCents) {
+      throw new Error('O valor já pago somado às parcelas supera o total contratado.');
+    }
     await api(id ? '/api/wedding/suppliers/' + encodeURIComponent(id) : '/api/wedding/suppliers', {
       method: id ? 'PUT' : 'POST',
       body: JSON.stringify({
         name: w('weddingSupplierName').value,
         totalCents, baselinePaidCents, note: w('weddingSupplierNote').value,
+        installments,
       }),
     });
     w('weddingSupplierDialog').close();
@@ -188,7 +276,7 @@ async function action(event) {
   if (!button) return;
   const id = button.dataset.id;
   const kind = button.dataset.action;
-  if (kind === 'edit') return supplierDialog(supplierById(id));
+  if (kind === 'edit' || kind === 'edit-plan') return supplierDialog(supplierById(id));
   if (kind === 'pay') return paymentDialog(id);
   if (kind === 'delete' && !confirm('Excluir este fornecedor e todas as parcelas do casamento?')) return;
   if (kind === 'undo' && !confirm('Desfazer o pagamento desta parcela?')) return;
@@ -225,6 +313,10 @@ w('weddingInitialize').addEventListener('click', async () => {
   finally { button.disabled = false; }
 });
 w('addWeddingSupplier').addEventListener('click', () => supplierDialog(null));
+w('addWeddingPlanExpense').addEventListener('click', () => supplierDialog(null));
+w('addWeddingInstallment').addEventListener('click', () => addPlanRow({ month: currentMonth() }));
+w('weddingSupplierTotal').addEventListener('input', updatePlanSummary);
+w('weddingSupplierBaseline').addEventListener('input', updatePlanSummary);
 w('weddingSupplierForm').addEventListener('submit', saveSupplier);
 w('weddingPaymentForm').addEventListener('submit', savePayment);
 w('weddingSchedule').addEventListener('click', action);
