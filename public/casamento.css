@@ -62,3 +62,32 @@
   .wedding-vendor-amounts strong{font-size:.82rem}
   .wedding-tag{font-size:.57rem}
 }
+
+.wedding-plan-editor{border:1px solid var(--line);border-radius:16px;padding:14px;background:#0d0d0d}
+.wedding-plan-editor-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:12px}
+.wedding-plan-editor-head strong{font-size:.95rem}
+.wedding-plan-editor-head p{margin:4px 0 0;color:var(--muted);font-size:.76rem;line-height:1.45}
+.wedding-installment-editor{display:grid;gap:10px}
+.wedding-plan-row{display:grid;grid-template-columns:1.15fr 1fr auto 1.15fr auto;gap:8px;align-items:end;padding:10px;border:1px solid #242424;border-radius:13px;background:#111}
+.wedding-plan-row label{font-size:.72rem}
+.wedding-plan-row input{padding:9px 10px}
+.wedding-paid-check{display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:7px;min-width:64px}
+.wedding-paid-check input{width:20px;height:20px;accent-color:var(--green)}
+.wedding-remove-part{height:38px}
+.wedding-plan-summary{display:flex;flex-wrap:wrap;gap:8px 14px;margin-top:12px;padding-top:10px;border-top:1px solid var(--line);font-size:.76rem;color:var(--muted)}
+.wedding-plan-summary strong{color:var(--text)}
+.wedding-plan-summary .gold strong{color:var(--gold)}
+.wedding-plan-summary .green strong{color:var(--green)}
+.wedding-payment-buttons{display:flex;gap:7px;flex-wrap:wrap;justify-content:flex-end}
+.wedding-mini.secondary{border-color:#3b3b3b;background:#171717;color:#d0d0d0}
+.wedding-unplanned{margin-top:9px;padding:9px 10px;border:1px dashed #5b4811;border-radius:10px;color:var(--gold);font-size:.76rem;background:#17130a}
+@media(max-width:720px){
+  .wedding-plan-row{grid-template-columns:1fr 1fr}
+  .wedding-paid-check{align-items:flex-start;flex-direction:row;justify-content:flex-start}
+  .wedding-paid-date{grid-column:1/-1}
+  .wedding-remove-part{grid-column:1/-1}
+}
+@media(max-width:600px){
+  .wedding-section-heading{align-items:flex-start}
+  .wedding-payment-buttons{flex-direction:column;align-items:flex-end}
+}
